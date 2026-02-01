@@ -1,0 +1,82 @@
+# ------------------------------------------------
+# Security & Environment (CRITICAL)
+# ------------------------------------------------
+.env
+.env.local
+.env.*.local
+secrets.yaml
+
+# ------------------------------------------------
+# Python & Runtime
+# ------------------------------------------------
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+MANIFEST
+
+# ------------------------------------------------
+# Virtual Environments
+# ------------------------------------------------
+venv/
+env/
+ENV/
+.venv/
+
+# ------------------------------------------------
+# Logs & Databases
+# ------------------------------------------------
+*.log
+logs/
+*.sqlite
+*.db
+
+# ------------------------------------------------
+# Voice & Audio Data (Project Specific)
+# ------------------------------------------------
+# We don't want to commit recorded calls or temp audio
+*.wav
+*.mp3
+*.flac
+*.ogg
+temp_audio/
+recordings/
+
+# ------------------------------------------------
+# IDE & OS
+# ------------------------------------------------
+.idea/
+.vscode/
+*.swp
+*.swo
+.DS_Store
+Thumbs.db
+
+# ------------------------------------------------
+# Testing
+# ------------------------------------------------
+.coverage
+htmlcov/
+.pytest_cache/
+
+# ------------------------------------------------
+# Tenants Specific (Optional)
+# ------------------------------------------------
+# If you want to keep specific client data local only:
+# src/tenants/secret_client_folder/
