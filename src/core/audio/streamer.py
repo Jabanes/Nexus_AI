@@ -14,10 +14,13 @@ import asyncio
 import logging
 import os
 import subprocess
-from typing import Optional, Callable
+from typing import Optional, Callable, TYPE_CHECKING
 from enum import Enum
 import websockets
 from fastapi import WebSocket
+
+if TYPE_CHECKING:
+    from src.core.history import SessionRecorder
 
 logger = logging.getLogger(__name__)
 
@@ -61,7 +64,8 @@ class AudioBridge:
         self,
         client_ws: WebSocket,
         tenant_id: str,
-        session_id: str
+        session_id: str,
+        session_recorder: Optional['SessionRecorder'] = None
     ):
         """
         Initialize the AudioBridge.
@@ -70,10 +74,12 @@ class AudioBridge:
             client_ws: FastAPI WebSocket connection from client
             tenant_id: Tenant identifier for logging/routing
             session_id: Unique session identifier
+            session_recorder: Optional SessionRecorder for capturing conversation history
         """
         self.client_ws = client_ws
         self.tenant_id = tenant_id
         self.session_id = session_id
+        self.recorder = session_recorder
         
         # PersonaPlex connection
         self.model_ws: Optional[websockets.WebSocketClientProtocol] = None
@@ -334,6 +340,13 @@ class AudioBridge:
                         # Send to PersonaPlex
                         await self.model_ws.send(pcm_data)
                         logger.debug(f"Sent {len(pcm_data)} bytes to PersonaPlex")
+                        
+                        # Log to session recorder
+                        if self.recorder:
+                            # Estimate duration: PCM 16-bit @ sample_rate
+                            # bytes / (2 bytes_per_sample * channels * sample_rate) * 1000 = ms
+                            duration_ms = int((len(pcm_data) / (2 * self.channels * self.sample_rate)) * 1000)
+                            self.recorder.log_user_audio(duration_ms, len(data))
                     
                     # Reset speaking flag after short delay
                     await asyncio.sleep(0.1)
@@ -377,6 +390,8 @@ class AudioBridge:
                     # BARGE-IN LOGIC: Don't send model audio if client is speaking
                     if self.is_client_speaking:
                         logger.debug("Barge-in detected: Dropping model audio")
+                        if self.recorder:
+                            self.recorder.log_barge_in()
                         continue
                     
                     self.is_model_speaking = True
@@ -391,6 +406,12 @@ class AudioBridge:
                         # Send to client
                         await self.client_ws.send_bytes(client_data)
                         logger.debug(f"Sent {len(client_data)} bytes to client")
+                        
+                        # Log to session recorder
+                        if self.recorder:
+                            # Estimate duration from PCM data
+                            duration_ms = int((len(pcm_data) / (2 * self.channels * self.sample_rate)) * 1000)
+                            self.recorder.log_ai_audio(duration_ms, len(client_data))
                     
                     self.is_model_speaking = False
                     

@@ -11,6 +11,7 @@ from src.core.context import set_request_context, reset_context
 from src.tenants.loader import TenantLoader
 from src.core.orchestration.conversation_manager import ConversationManager
 from src.core.audio.streamer import AudioBridge
+from src.core.history import SessionRecorder, FileSessionRepository
 
 # 1. Bootstrapping (Env + Logs)
 load_dotenv()
@@ -347,6 +348,8 @@ async def call_endpoint(websocket: WebSocket, tenant_id: str, customer_phone: Op
     await websocket.accept()
     session_id = None
     audio_bridge = None
+    session_recorder = None
+    session_repository = None
     
     try:
         # Generate session ID
@@ -359,6 +362,11 @@ async def call_endpoint(websocket: WebSocket, tenant_id: str, customer_phone: Op
             f"📞 Call initiated: tenant={tenant_id}, session={session_id}, "
             f"phone={customer_phone or 'unknown'}"
         )
+        
+        # Initialize session persistence (Repository Pattern)
+        session_repository = FileSessionRepository()
+        session_recorder = SessionRecorder(tenant_id=tenant_id, session_id=session_id)
+        logger.debug(f"Session recorder initialized for {tenant_id}:{session_id}")
         
         # Send connection acknowledgment
         await websocket.send_json({
@@ -415,7 +423,8 @@ async def call_endpoint(websocket: WebSocket, tenant_id: str, customer_phone: Op
             audio_bridge = AudioBridge(
                 client_ws=websocket,
                 tenant_id=tenant_id,
-                session_id=session_id
+                session_id=session_id,
+                session_recorder=session_recorder
             )
             
             logger.info(f"🎙️ AudioBridge created, connecting to PersonaPlex...")
@@ -435,6 +444,9 @@ async def call_endpoint(websocket: WebSocket, tenant_id: str, customer_phone: Op
         except ConnectionError as e:
             # PersonaPlex connection failed
             logger.error(f"❌ PersonaPlex connection failed: {e}")
+            if session_recorder:
+                session_recorder.log_error("connection_error", str(e))
+                session_recorder.finalize(status="ERROR")
             await websocket.send_json({
                 "type": "error",
                 "code": "audio_service_unavailable",
@@ -445,6 +457,9 @@ async def call_endpoint(websocket: WebSocket, tenant_id: str, customer_phone: Op
             
         except Exception as e:
             logger.exception(f"❌ Error in audio streaming: {e}")
+            if session_recorder:
+                session_recorder.log_error("streaming_error", str(e))
+                session_recorder.finalize(status="ERROR")
             await websocket.send_json({
                 "type": "error",
                 "code": "streaming_error",
@@ -455,6 +470,8 @@ async def call_endpoint(websocket: WebSocket, tenant_id: str, customer_phone: Op
     
     except WebSocketDisconnect:
         logger.info(f"📴 Client disconnected: session={session_id}")
+        if session_recorder:
+            session_recorder.finalize(status="DISCONNECTED")
     
     except Exception as e:
         logger.exception(f"❌ Unexpected error in call endpoint: {e}")
@@ -475,6 +492,22 @@ async def call_endpoint(websocket: WebSocket, tenant_id: str, customer_phone: Op
                 await audio_bridge.stop()
             except Exception as e:
                 logger.error(f"Error stopping audio bridge: {e}")
+        
+        # Finalize and save session recording
+        if session_recorder and session_repository:
+            try:
+                # Finalize the session (marks end time, calculates duration)
+                session_recorder.finalize(status="COMPLETED")
+                
+                # Export session data
+                session_data = session_recorder.export()
+                
+                # Save to repository (file system)
+                file_path = await session_repository.save_session(tenant_id, session_data)
+                logger.info(f"💾 Session saved: {file_path}")
+                
+            except Exception as e:
+                logger.error(f"❌ Failed to save session recording: {e}")
         
         # Close conversation session
         if session_id:

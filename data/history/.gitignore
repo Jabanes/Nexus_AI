@@ -1,0 +1,9 @@
+# Ignore all session JSON files (contains customer data)
+*.json
+
+# Ignore tenant directories
+*/
+
+# Keep this .gitignore file
+!.gitignore
+!.gitkeep

@@ -118,6 +118,9 @@ Nexus Voice Engine is a **multi-tenant SaaS platform** that powers AI-driven voi
 | **Tenant Configs** | `src/tenants/*/config.yaml` | Business-specific prompts, tools, voice settings | Tenant |
 | **Tenant Tools** | `src/tenants/*/tools.py` | Executable Python functions for external integrations | Tenant |
 | **PersonaPlex Sidecar** | External Docker | **GPU-accelerated audio processing (NOT in this codebase)** | External |
+| **SessionRecorder** | `src/core/history.py` | In-memory buffer for capturing real-time conversation events | Core |
+| **FileSessionRepository** | `src/core/history.py` | File-based session persistence implementation | Core |
+| **ISessionRepository** | `src/interfaces/session_repository.py` | Abstract interface for session persistence | Interface |
 
 ---
 
@@ -223,9 +226,323 @@ sequenceDiagram
     Gemini->>Engine: "The barber is free at 10 AM and 2 PM."
 ```
 
+### 3.4 Session Persistence Flow
+
+**Architecture Pattern:** Repository Pattern for future-proof persistence
+
+```mermaid
+sequenceDiagram
+    participant Client
+    participant AudioBridge
+    participant SessionRecorder
+    participant Repository
+    participant FileSystem
+
+    Client->>AudioBridge: WebSocket connect
+    AudioBridge->>SessionRecorder: Initialize (tenant_id, session_id)
+    SessionRecorder->>SessionRecorder: Log "connection_established"
+    
+    loop Audio Streaming
+        Client->>AudioBridge: Audio chunk
+        AudioBridge->>SessionRecorder: log_user_audio(duration, bytes)
+        AudioBridge->>PersonaPlex: Send PCM
+        PersonaPlex->>AudioBridge: Response audio
+        AudioBridge->>SessionRecorder: log_ai_audio(duration, bytes)
+        AudioBridge->>Client: Send audio
+    end
+    
+    Note over AudioBridge: User speaks while AI talks
+    AudioBridge->>SessionRecorder: log_barge_in()
+    
+    Client->>AudioBridge: Disconnect
+    AudioBridge->>SessionRecorder: finalize(status="COMPLETED")
+    SessionRecorder->>Repository: save_session(tenant_id, session_data)
+    Repository->>FileSystem: Write JSON to data/history/{tenant_id}/{session_id}.json
+```
+
 ---
 
-## 4. QUICK START GUIDE
+## 4. DATA PERSISTENCE & SESSION HISTORY
+
+### 4.1 Architecture: Repository Pattern
+
+**Why Repository Pattern?**
+
+The session persistence layer uses the **Repository Pattern** to decouple the application logic from the storage implementation. This allows:
+- ✅ **Future Migration:** Switch from files to PostgreSQL/MongoDB by changing config only
+- ✅ **Testability:** Easy to mock repository for unit tests
+- ✅ **Tenant Isolation:** Data segregated by directory structure
+- ✅ **SSOT Compliance:** Single interface for all persistence operations
+
+**Key Components:**
+
+| Component | Location | Purpose |
+|-----------|----------|---------|
+| `ISessionRepository` | `src/interfaces/session_repository.py` | Abstract interface (contract) |
+| `FileSessionRepository` | `src/core/history.py` | File-based implementation |
+| `SessionRecorder` | `src/core/history.py` | In-memory event buffer |
+| `data/history/{tenant}/` | Filesystem | Tenant-isolated storage |
+
+### 4.2 Session Recording Architecture
+
+**SessionRecorder** acts as an in-memory buffer during an active call:
+
+```python
+# Lifecycle
+recorder = SessionRecorder(tenant_id, session_id)
+recorder.log_user_audio(duration_ms, bytes_sent)
+recorder.log_ai_text("Hello! How can I help you?")
+recorder.log_tool_usage("check_availability", {...}, "Available slots...")
+recorder.log_barge_in()  # User interrupted
+recorder.finalize(status="COMPLETED")
+session_data = recorder.export()  # Returns complete session JSON
+```
+
+**Events Captured:**
+- ✅ User audio chunks (duration + bytes)
+- ✅ User transcribed text (from PersonaPlex STT)
+- ✅ AI responses (text + audio)
+- ✅ Tool executions (name, input, output, duration)
+- ✅ Barge-in events (interruptions)
+- ✅ Errors and system events
+- ✅ Connection lifecycle
+
+### 4.3 Session Data Schema
+
+**File Location:** `data/history/{tenant_id}/{session_id}.json`
+
+**Schema:**
+```json
+{
+  "session_id": "3f7a8b2c-1d4e-4f5a-b6c7-d8e9f0a1b2c3",
+  "meta": {
+    "tenant_id": "barber_shop_demo",
+    "start_time": "2026-02-01T14:30:00.000Z",
+    "end_time": "2026-02-01T14:35:42.123Z",
+    "duration_seconds": 342.12,
+    "status": "COMPLETED"
+  },
+  "statistics": {
+    "user_messages": 5,
+    "ai_messages": 6,
+    "tool_calls": 2,
+    "errors": 0,
+    "total_events": 47
+  },
+  "summary": {
+    "intent": "Unknown (To be implemented by LLM)",
+    "outcome": "Success"
+  },
+  "transcript": [
+    {
+      "timestamp": "2026-02-01T14:30:00.123Z",
+      "role": "system",
+      "type": "connection_established",
+      "event": "connection_established"
+    },
+    {
+      "timestamp": "2026-02-01T14:30:05.456Z",
+      "role": "user",
+      "type": "audio",
+      "duration_ms": 2000,
+      "bytes": 64000
+    },
+    {
+      "timestamp": "2026-02-01T14:30:07.789Z",
+      "role": "user",
+      "type": "text",
+      "content": "Is there an appointment available for tomorrow?",
+      "confidence": 0.95
+    },
+    {
+      "timestamp": "2026-02-01T14:30:08.012Z",
+      "role": "ai",
+      "type": "text",
+      "content": "Let me check our availability for you.",
+      "voice_id": "en_us_male_calm"
+    },
+    {
+      "timestamp": "2026-02-01T14:30:08.345Z",
+      "role": "tool",
+      "type": "execution",
+      "name": "check_availability",
+      "input": {"date": "2026-02-02", "time": "10:00"},
+      "output": "Available slots: 10:00 AM, 2:00 PM",
+      "execution_time_ms": 245
+    },
+    {
+      "timestamp": "2026-02-01T14:30:09.678Z",
+      "role": "ai",
+      "type": "text",
+      "content": "Yes, we have availability at 10 AM and 2 PM tomorrow."
+    },
+    {
+      "timestamp": "2026-02-01T14:30:15.901Z",
+      "role": "system",
+      "type": "barge_in",
+      "message": "User interrupted AI response"
+    },
+    {
+      "timestamp": "2026-02-01T14:35:42.123Z",
+      "role": "system",
+      "type": "session_ended",
+      "event": "session_ended",
+      "status": "COMPLETED",
+      "duration_seconds": 342.12
+    }
+  ]
+}
+```
+
+### 4.4 Integration Points
+
+**AudioBridge Integration:**
+
+The `AudioBridge` automatically records events as they occur:
+
+```python
+# In src/core/audio/streamer.py
+if self.recorder:
+    self.recorder.log_user_audio(duration_ms, bytes_sent)
+    self.recorder.log_ai_audio(duration_ms, bytes_sent)
+    self.recorder.log_barge_in()
+```
+
+**Main WebSocket Endpoint:**
+
+The `/ws/call/{tenant_id}` endpoint manages the session lifecycle:
+
+```python
+# Initialize
+session_recorder = SessionRecorder(tenant_id, session_id)
+session_repository = FileSessionRepository()
+
+# Pass to AudioBridge
+audio_bridge = AudioBridge(..., session_recorder=session_recorder)
+
+# Save on cleanup (finally block)
+session_recorder.finalize(status="COMPLETED")
+session_data = session_recorder.export()
+await session_repository.save_session(tenant_id, session_data)
+```
+
+### 4.5 Repository Implementations
+
+**Current: File-Based Storage**
+
+```python
+# src/core/history.py
+class FileSessionRepository(ISessionRepository):
+    """Stores sessions as JSON files in data/history/{tenant}/"""
+    
+    async def save_session(self, tenant_id, session_data):
+        # Atomic write: temp file → rename
+        # UTF-8, pretty-printed JSON
+        # Returns: file path
+```
+
+**Directory Structure:**
+```
+data/
+└── history/
+    ├── barber_shop_demo/
+    │   ├── 3f7a8b2c-....json
+    │   ├── 4d8c9e1f-....json
+    │   └── 5a9b2c3d-....json
+    ├── pizza_shop_01/
+    │   └── 6b1c4d5e-....json
+    └── .gitignore  # Ignore *.json (customer data)
+```
+
+**Future: Database Storage (Example)**
+
+```python
+# Future implementation (not yet built)
+class PostgresSessionRepository(ISessionRepository):
+    async def save_session(self, tenant_id, session_data):
+        # INSERT INTO sessions (tenant_id, session_id, data, ...)
+        # VALUES (%s, %s, %s::jsonb, ...)
+```
+
+**Switching Storage Backend:**
+
+```yaml
+# tenant config.yaml (future)
+persistence:
+  provider: "postgresql"  # or "file", "mongodb", "s3"
+  connection_string: "${DATABASE_URL}"
+```
+
+### 4.6 Querying Session History
+
+**List Recent Sessions:**
+
+```python
+repository = FileSessionRepository()
+sessions = await repository.list_sessions("barber_shop_demo", limit=50)
+
+for session in sessions:
+    print(f"{session['session_id']}: {session['meta']['status']}")
+```
+
+**Retrieve Specific Session:**
+
+```python
+session_data = await repository.get_session("barber_shop_demo", session_id)
+print(f"Duration: {session_data['meta']['duration_seconds']}s")
+print(f"Messages: {session_data['statistics']['user_messages']}")
+```
+
+**Future: Analytics Dashboard**
+
+```python
+# Future: Aggregate statistics
+SELECT 
+    tenant_id,
+    COUNT(*) as total_calls,
+    AVG(duration_seconds) as avg_duration,
+    SUM(statistics->>'tool_calls') as total_tool_calls
+FROM sessions
+WHERE status = 'COMPLETED'
+GROUP BY tenant_id;
+```
+
+### 4.7 Privacy & Compliance
+
+**Data Protection:**
+- ✅ Tenant-isolated storage prevents data leakage
+- ✅ JSON files contain customer audio metadata (not actual audio bytes)
+- ✅ `.gitignore` prevents committing customer data to version control
+- ✅ File permissions should be restricted (chmod 600)
+
+**GDPR Compliance (Future):**
+- [ ] Add `customer_consent` field to session metadata
+- [ ] Implement data deletion API: `DELETE /sessions/{session_id}`
+- [ ] Add retention policy (auto-delete after N days)
+- [ ] Implement data export API (right to access)
+
+### 4.8 Error Handling
+
+**Session Status Values:**
+- `COMPLETED`: Normal session termination
+- `DISCONNECTED`: Client disconnected unexpectedly
+- `ERROR`: Server-side error occurred
+
+**Finalization in Error Cases:**
+
+```python
+try:
+    await audio_bridge.process_stream()
+except ConnectionError as e:
+    recorder.log_error("connection_error", str(e))
+    recorder.finalize(status="ERROR")
+finally:
+    await repository.save_session(tenant_id, recorder.export())
+```
+
+---
+
+## 5. QUICK START GUIDE
 
 **Goal:** Get Nexus Voice Engine running with real-time audio in 10 minutes.
 
@@ -1097,6 +1414,7 @@ sudo apt-get install ffmpeg
 - ✅ Real-time audio streaming (Sidecar pattern)
 - ✅ Barge-in detection
 - ✅ Audio transcoding
+- ✅ **Session persistence (File-based with Repository Pattern)**
 
 ### Phase 2: Production Readiness (IN PROGRESS)
 - [ ] Authentication & API keys
@@ -1104,8 +1422,8 @@ sudo apt-get install ffmpeg
 - [ ] Comprehensive test coverage (pytest)
 - [ ] CI/CD pipeline
 - [ ] Monitoring/alerting (Prometheus/Grafana)
-- [ ] Audio recording/playback
-- [ ] Session persistence (Redis)
+- [ ] Audio recording/playback (actual audio bytes, not just metadata)
+- [ ] Database migration (PostgreSQL/MongoDB via Repository Pattern)
 
 ### Phase 3: Advanced Features
 - [ ] Admin dashboard for tenant management
@@ -1186,6 +1504,10 @@ sudo apt-get install ffmpeg
 | **Barge-in** | Interruption detection - stops AI audio when user speaks |
 | **FFmpeg** | Audio transcoding tool for format conversion |
 | **PCM** | Raw audio format (16-bit, 16kHz) used by PersonaPlex |
+| **SessionRecorder** | In-memory buffer that captures real-time conversation events |
+| **Repository Pattern** | Design pattern that abstracts data persistence layer |
+| **ISessionRepository** | Interface defining contract for session storage |
+| **FileSessionRepository** | File-based implementation of session persistence |
 
 ---
 
