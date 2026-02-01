@@ -1,0 +1,70 @@
+# ============================================
+# TENANT CONFIGURATION TEMPLATE
+# ============================================
+# Copy this entire directory to create a new tenant.
+# Example: cp -r src/tenants/_template src/tenants/my_business
+#
+# Then customize this file for your specific use case.
+
+# Unique identifier for this tenant
+# Must match the directory name and be used in API calls
+tenant_id: "my_business_01"
+
+# Voice settings for audio synthesis
+voice_settings:
+  # Provider: nvidia_personaplex, vapi, elevenlabs
+  provider: "nvidia_personaplex"
+  
+  # Voice ID from your audio provider
+  # For NVIDIA PersonaPlex: Check their voice catalog
+  # For ElevenLabs: Your custom voice ID
+  voice_id: "en_us_female_friendly"
+  
+  # Language code (BCP-47 format)
+  # Examples: en-US, es-ES, fr-FR, de-DE, he-IL
+  language: "en-US"
+
+# System prompt that defines the AI assistant's personality and behavior
+# This is the most important configuration - be specific and clear
+system_prompt: |
+  You are a helpful virtual assistant for [YOUR BUSINESS NAME].
+  
+  Your role:
+  - Answer customer questions politely and accurately
+  - Help customers with [SPECIFIC TASKS]
+  - Keep responses concise and conversational
+  
+  Guidelines:
+  - Be warm but professional
+  - Use simple language
+  - Confirm details before taking actions
+  - If you don't know something, admit it - don't make up information
+  
+  Business Information:
+  - Operating hours: [HOURS]
+  - Location: [ADDRESS]
+  - Specialty: [WHAT YOU'RE KNOWN FOR]
+
+# List of tools (functions) available to this assistant
+# Tool names must match the class names in tools.py (converted to snake_case)
+# Example: CheckAvailabilityTool -> "check_availability"
+enabled_tools:
+  - "example_tool"
+  # - "another_tool"
+  # Add your tools here
+
+# Optional: Additional metadata
+metadata:
+  business_name: "My Business"
+  industry: "service"
+  contact_email: "support@mybusiness.com"
+  
+# Optional: Custom configuration for your specific needs
+custom_config:
+  # Add any business-specific settings here
+  # Example:
+  # booking_buffer_minutes: 15
+  # max_party_size: 8
+  # working_hours:
+  #   monday: "09:00-18:00"
+  #   tuesday: "09:00-18:00"
