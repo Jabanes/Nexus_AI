@@ -549,13 +549,87 @@ finally:
 ### Prerequisites
 
 - Python 3.11+
-- Docker (for PersonaPlex sidecar)
+- Docker (for PersonaPlex sidecar) OR use mock for testing
 - FFmpeg installed on system
-- NVIDIA GPU (for PersonaPlex) OR use mock for testing
+- NVIDIA GPU (for PersonaPlex in production)
+
+---
+
+### 🚀 Option A: Automated Startup (RECOMMENDED)
+
+**One command to start everything:**
+
+```bash
+# Install dependencies (first time only)
+pip install -r requirements.txt
+
+# Start development environment
+python scripts/start_dev.py
+```
+
+**What it does:**
+- ✅ Runs pre-flight checks (FFmpeg, ports, .env)
+- ✅ Auto-creates `.env` from example if missing
+- ✅ Starts Mock PersonaPlex sidecar (port 9000)
+- ✅ Starts Nexus Engine (port 8000 or auto-finds free port)
+- ✅ Handles graceful shutdown (Ctrl+C kills both processes)
+- ✅ Streams logs from both services
+
+**Expected output:**
+```
+╔══════════════════════════════════════════════════════════════════╗
+║           Nexus Voice Engine - Development Startup               ║
+╚══════════════════════════════════════════════════════════════════╝
+
+============================================================
+                    PRE-FLIGHT CHECKS
+============================================================
+
+✅ [CHECK] Virtual Environment → Active
+✅ [CHECK] FFmpeg → Found in PATH
+✅ [CHECK] Environment File → .env file exists
+✅ [CHECK] Port 9000 (Mock Sidecar) → Available
+✅ [CHECK] Port 8000 (Nexus Engine) → Available
+✅ [CHECK] Python Dependencies → All installed
+
+✓  [SUCCESS] All pre-flight checks PASSED
+
+============================================================
+           STARTING DEVELOPMENT ENVIRONMENT
+============================================================
+
+ℹ  [INFO] Starting Mock PersonaPlex Sidecar...
+✓  [SUCCESS] Mock PersonaPlex Sidecar started (PID: 12345)
+ℹ  [INFO] Starting Nexus Voice Engine...
+✓  [SUCCESS] Nexus Voice Engine started (PID: 12346)
+
+============================================================
+                    SERVICES RUNNING
+============================================================
+✓ Mock PersonaPlex: ws://localhost:9000/v1/audio-stream
+✓ Nexus Engine: http://localhost:8000
+✓ WebSocket Endpoint: ws://localhost:8000/ws/call/{tenant_id}
+
+Press Ctrl+C to stop all services
+
+============================================================
+                         LOGS
+============================================================
+[MOCK] 🚀 Mock NVIDIA PersonaPlex Server Starting
+[NEXUS] INFO:     Started server process [12346]
+[NEXUS] INFO:     Waiting for application startup.
+[NEXUS] INFO:     Application startup complete.
+```
+
+**To stop:** Press `Ctrl+C` once. Both services will shut down gracefully.
+
+---
+
+### 🔧 Option B: Manual Startup (Advanced Users)
 
 ### Step 1: Start PersonaPlex Docker Container
 
-#### Option A: Production (with GPU)
+#### Production (with GPU)
 
 ```bash
 # Pull and run PersonaPlex
@@ -569,27 +643,16 @@ docker run -d \
 docker logs personaplex
 ```
 
-#### Option B: Development (Mock Server)
+#### Development (Mock Server)
 
+The automated startup script (`python scripts/start_dev.py`) handles this automatically.
+
+**Manual mock server (if needed):**
 ```bash
-# Create mock server for testing
-cat > tests/mock_personaplex.py << 'EOF'
-import asyncio
-import websockets
-
-async def echo_server(websocket, path):
-    async for message in websocket:
-        await asyncio.sleep(0.1)  # Simulate processing
-        await websocket.send(message)  # Echo back
-
-start_server = websockets.serve(echo_server, "localhost", 9000)
-asyncio.get_event_loop().run_until_complete(start_server)
-asyncio.get_event_loop().run_forever()
-EOF
-
-# Run the mock server
 python tests/mock_personaplex.py
 ```
+
+**Note:** The mock server is included in the repository (`tests/mock_personaplex.py`). It provides a simple echo server that simulates PersonaPlex for development/testing.
 
 ### Step 2: Configure Nexus
 

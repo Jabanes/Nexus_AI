@@ -96,39 +96,64 @@ Before submitting code, verify against the **CODE_AUDIT_PROMPT**:
 
 ---
 
-## 🛠️ Quick Start (10 Minutes)
+## 🛠️ Quick Start (One Command!)
 
-### 1. Start PersonaPlex Docker
+### Development Mode (Automatic Setup)
+
 ```bash
-# Production (with GPU)
-docker run -d --name personaplex --gpus all -p 9000:9000 nvidia/personaplex:latest
-
-# Development (mock server)
-python tests/mock_personaplex.py
-```
-
-### 2. Configure Environment
-```bash
-cp env.example.new .env
-# Edit .env: Set PERSONAPLEX_WS_URL, GEMINI_API_KEY
-```
-
-### 3. Install Dependencies
-```bash
-python -m venv env
-source env/bin/activate  # Windows: env\Scripts\activate
+# Install dependencies (first time only)
 pip install -r requirements.txt
+
+# Start everything with one command
+python scripts/start_dev.py
 ```
 
-### 4. Start Nexus
+**That's it!** The script will:
+- ✅ Check FFmpeg installation
+- ✅ Check port availability (auto-switch if needed)
+- ✅ Create `.env` from example if missing
+- ✅ Start Mock PersonaPlex sidecar (port 9000)
+- ✅ Start Nexus Engine (port 8000)
+- ✅ Handle graceful shutdown (Ctrl+C)
+
+**Output:**
+```
+[CHECK] FFmpeg ✅
+[CHECK] Port 9000 free ✅
+[CHECK] Port 8000 free ✅
+[INFO] Starting Mock PersonaPlex Sidecar...
+[INFO] Starting Nexus Voice Engine...
+```
+
+### Manual Setup (Advanced)
+
+If you need more control:
+
 ```bash
+# 1. Setup environment
+python -m venv env
+env\Scripts\activate  # Windows
+source env/bin/activate  # macOS/Linux
+
+# 2. Install dependencies
+pip install -r requirements.txt
+
+# 3. Configure
+cp env.example.new .env
+# Edit .env: Set GEMINI_API_KEY
+
+# 4. Start Mock Sidecar (Terminal 1)
+python tests/mock_personaplex.py
+
+# 5. Start Nexus Engine (Terminal 2)
 uvicorn src.main:app --host 0.0.0.0 --port 8000 --reload
 ```
 
-### 5. Test Real-Time Audio
+### Test Real-Time Audio
+
 Open `test_audio.html` in your browser and click "Start Call".
 
-**For complete setup instructions, see `docs/PROJECT_CONTEXT.md` → Section 4: Quick Start Guide**
+**For complete documentation, see `docs/PROJECT_CONTEXT.md`**
 
 ---
 
