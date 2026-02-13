@@ -1001,9 +1001,104 @@ services:
 
 ---
 
-## 6. TENANT ISOLATION STRATEGY
+## 6. REVENUE INTELLIGENCE LAYER
 
-### 6.1 Multi-Tenancy Design
+### 6.1 Architecture Overview
+
+The Revenue Intelligence Layer transforms raw conversation data into actionable business intelligence. It consists of three components:
+
+```mermaid
+flowchart LR
+    A[Call Ends] --> B[SessionRecorder.export]
+    B --> C[PostCallIntelligenceEngine]
+    C --> D[Gemini LLM]
+    D --> E[LeadObject]
+    E --> F[Session JSON + Intelligence]
+```
+
+### 6.2 Post-Call Intelligence Engine
+
+**File:** `src/core/intelligence.py`
+
+**Purpose:** Analyzes completed session transcripts via LLM to extract structured lead data.
+
+**Key Components:**
+- `LeadObject` (Pydantic model) — customer name, phone, intent, sentiment, outcome, key topics, follow-up flag, summary
+- `PostCallIntelligenceEngine` — extracts text transcript, sends to Gemini, parses response into a LeadObject
+
+**Integration Point:** Called non-blocking in `main.py` `call_endpoint` finally block after session save.
+
+**Robustness:**
+- JSON parser strips markdown fences (```json) from LLM output
+- Wrapped in try/except — failures never crash the call flow
+- Returns a fallback LeadObject with error summary on any failure
+
+**Output Schema:**
+```json
+{
+  "intelligence": {
+    "customer_name": "דני",
+    "customer_phone": "+972501234567",
+    "core_intent": "booking",
+    "sentiment": "positive",
+    "call_outcome": "booking_made",
+    "key_topics": ["haircut", "availability", "pricing"],
+    "follow_up_required": false,
+    "summary": "Customer booked a haircut for tomorrow at 10am"
+  }
+}
+```
+
+### 6.3 Hybrid Context Configuration
+
+Tenant configs now separate **identity/behavior** from **static knowledge**:
+
+```yaml
+# WHO the agent is (system_prompt)
+system_prompt: |
+  אתה העוזר האישי של 'מספרת יוסי'...
+
+# WHAT the agent knows (knowledge_base)
+knowledge_base:
+  prices:
+    - service: "תספורת גבר"
+      price: "60 ש''ח"
+  business_hours:
+    sunday_thursday: "09:00-20:00"
+  policies:
+    - "ביטול תור עד 2 שעות לפני"
+```
+
+**How it works:**
+- `TenantLoader.load_tenant()` detects the `knowledge_base` key
+- If present, the recursive `_format_knowledge()` formatter converts it to human-readable text
+- The formatted knowledge is appended to `system_prompt` under a "Business Information" header
+- If absent, loader behaves identically to the legacy format (backward compatible)
+
+### 6.4 Simulation Client
+
+**File:** `scripts/simulate_customer.py`
+
+**Purpose:** End-to-end test client that verifies the full pipeline.
+
+**Phases:**
+1. Hybrid config verification (TenantLoader)
+2. Server health check
+3. Multi-turn conversation via HTTP API
+4. Session persistence validation
+5. Intelligence engine direct test (with synthetic transcript)
+
+**Usage:**
+```bash
+python scripts/simulate_customer.py --tenant barber_shop_demo
+python scripts/simulate_customer.py --skip-server  # config + intelligence only
+```
+
+---
+
+## 7. TENANT ISOLATION STRATEGY
+
+### 7.1 Multi-Tenancy Design
 
 **Isolation Level:** Application-level (Shared Database, Isolated Execution Context)
 
@@ -1024,25 +1119,26 @@ Each tenant is isolated through:
    - No hardcoded business logic in `src/core/` or `src/main.py`
    - Tools are loaded dynamically per request
 
-### 6.2 Tenant Directory Structure
+### 7.2 Tenant Directory Structure
 
 ```
 src/tenants/
 ├── _template/              # Copy this to create new tenants
-│   ├── config.yaml         # Tenant configuration blueprint
+│   ├── config.yaml         # Tenant configuration blueprint (hybrid)
 │   └── tools.py            # Tool implementation template
 ├── barber_shop_demo/
-│   ├── config.yaml         # Barber shop specific config
+│   ├── config.yaml         # Barber shop config (hybrid)
 │   └── tools.py            # CheckAvailabilityTool, BookAppointmentTool
 ├── pizza_shop/             # Example: Future tenant
 │   ├── config.yaml
 │   └── tools.py            # CheckInventoryTool, PlaceOrderTool
-└── loader.py               # Dynamic tenant loader
+└── loader.py               # Dynamic tenant loader + knowledge formatter
 ```
 
 ---
 
-## 7. LOGGING STRATEGY
+## 8. LOGGING STRATEGY
+
 
 ### 7.1 Context-Aware Logging
 
@@ -1091,7 +1187,7 @@ LOG_LEVEL=ERROR     # Only errors
 
 ---
 
-## 8. HOW TO ADD A NEW TENANT (STEP-BY-STEP)
+## 9. HOW TO ADD A NEW TENANT (STEP-BY-STEP)
 
 ### Step 1: Copy the Template
 
@@ -1113,13 +1209,16 @@ voice_settings:
 
 system_prompt: |
   You are the virtual assistant for 'Maria's Italian Restaurant'.
-  You can help customers:
-  - Check table availability
-  - Make reservations
-  - Answer questions about the menu
-  
+  Help customers check tables and make reservations.
   Be warm, professional, and efficient.
-  Our specialty is wood-fired pizza and homemade pasta.
+
+knowledge_base:
+  menu_highlights:
+    - "Wood-fired Margherita Pizza"
+    - "Homemade Tagliatelle Bolognese"
+  hours:
+    monday_saturday: "12:00-22:00"
+    sunday: "Closed"
 
 enabled_tools:
   - "check_table_availability"
@@ -1206,7 +1305,8 @@ uvicorn src.main:app --reload --port 8000
 
 ---
 
-## 9. TOOL DEVELOPMENT GUIDE
+## 10. TOOL DEVELOPMENT GUIDE
+
 
 ### 9.1 The BaseTool Contract
 
@@ -1280,7 +1380,8 @@ class CheckWeatherTool(BaseTool):
 
 ---
 
-## 10. ARCHITECTURAL CONSTRAINTS
+## 11. ARCHITECTURAL CONSTRAINTS
+
 
 ### 10.1 What You CAN Do
 
@@ -1304,7 +1405,8 @@ class CheckWeatherTool(BaseTool):
 
 ---
 
-## 11. TESTING STRATEGY
+## 12. TESTING STRATEGY
+
 
 ### 11.1 Manual Testing
 
@@ -1341,7 +1443,8 @@ def test_load_invalid_tenant():
 
 ---
 
-## 12. DEPLOYMENT CONSIDERATIONS
+## 13. DEPLOYMENT CONSIDERATIONS
+
 
 ### 12.1 Environment Variables
 
@@ -1377,7 +1480,8 @@ def test_load_invalid_tenant():
 
 ---
 
-## 13. TROUBLESHOOTING
+## 14. TROUBLESHOOTING
+
 
 ### Problem: PersonaPlex Connection Failed
 
@@ -1467,7 +1571,7 @@ sudo apt-get install ffmpeg
 
 ---
 
-## 14. FUTURE ROADMAP
+## 15. FUTURE ROADMAP
 
 ### Phase 1: Core Stability (COMPLETED ✅)
 - ✅ Multi-tenant architecture
@@ -1478,6 +1582,12 @@ sudo apt-get install ffmpeg
 - ✅ Barge-in detection
 - ✅ Audio transcoding
 - ✅ **Session persistence (File-based with Repository Pattern)**
+
+### Phase 1.5: Revenue Intelligence Layer (COMPLETED ✅)
+- ✅ **Post-Call Intelligence Engine** (LLM-based lead extraction)
+- ✅ **Hybrid Context Configuration** (system_prompt + knowledge_base)
+- ✅ **End-to-End Simulation Client** (scripts/simulate_customer.py)
+- ✅ **LeadObject schema** (Pydantic model for structured output)
 
 ### Phase 2: Production Readiness (IN PROGRESS)
 - [ ] Authentication & API keys
@@ -1492,7 +1602,8 @@ sudo apt-get install ffmpeg
 - [ ] Admin dashboard for tenant management
 - [ ] Real-time analytics per tenant
 - [ ] Tool marketplace
-- [ ] Voice analytics (sentiment, intent)
+- [ ] Lead CRM integration
+- [ ] Voice analytics (advanced sentiment, intent trends)
 - [ ] Multi-language support expansion
 - [ ] Custom voice training per tenant
 
@@ -1506,7 +1617,8 @@ sudo apt-get install ffmpeg
 
 ---
 
-## 15. SECURITY CONSIDERATIONS
+## 16. SECURITY CONSIDERATIONS
+
 
 ### 15.1 Current Security Measures
 
@@ -1530,7 +1642,7 @@ sudo apt-get install ffmpeg
 
 ---
 
-## 16. CONTRIBUTING GUIDELINES
+## 17. CONTRIBUTING GUIDELINES
 
 ### Before Making Changes
 
@@ -1552,7 +1664,7 @@ sudo apt-get install ffmpeg
 
 ---
 
-## 17. GLOSSARY
+## 18. GLOSSARY
 
 | Term | Definition |
 |------|------------|
@@ -1571,10 +1683,14 @@ sudo apt-get install ffmpeg
 | **Repository Pattern** | Design pattern that abstracts data persistence layer |
 | **ISessionRepository** | Interface defining contract for session storage |
 | **FileSessionRepository** | File-based implementation of session persistence |
+| **PostCallIntelligenceEngine** | LLM-powered analyzer that extracts LeadObjects from transcripts |
+| **LeadObject** | Structured data model representing extracted revenue intelligence |
+| **Hybrid Context** | Config pattern separating identity (system_prompt) from knowledge (knowledge_base) |
 
 ---
 
-## 18. CONTACT & SUPPORT
+## 19. CONTACT & SUPPORT
+
 
 **Project Maintainer:** Nexus AI Development Team  
 **Architecture Questions:** Refer to `docs/ARCHITECT_PROMPT.md`  
@@ -1584,7 +1700,7 @@ sudo apt-get install ffmpeg
 
 ---
 
-**Document Version:** 2.0 (Sidecar Architecture)  
+**Document Version:** 3.0 (Revenue Intelligence Layer)  
 **Last Reviewed:** February 2026  
 **Next Review:** March 2026  
-**Status:** ✅ Production Ready with Real-Time Audio Streaming
+**Status:** ✅ Production Ready with Real-Time Audio Streaming + Revenue Intelligence

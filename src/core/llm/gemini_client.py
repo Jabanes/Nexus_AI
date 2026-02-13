@@ -24,16 +24,20 @@ class GeminiClient:
     from the tenant configuration and executes them generically.
     """
     
-    def __init__(self, model_name: str = "gemini-1.5-pro"):
+    def __init__(self, model_name: str = None):
         """
         Initialize the Gemini client.
         
         Args:
-            model_name: The Gemini model to use (default: gemini-1.5-pro)
+            model_name: The Gemini model to use (default: reads from GEMINI_MODEL env var, falls back to gemini-pro)
         """
         api_key = os.getenv("GEMINI_API_KEY")
         if not api_key:
             raise ValueError("GEMINI_API_KEY environment variable not set")
+        
+        # Read model from environment if not explicitly provided
+        if model_name is None:
+            model_name = os.getenv("GEMINI_MODEL", "gemini-pro")
         
         genai.configure(api_key=api_key)
         self.model_name = model_name

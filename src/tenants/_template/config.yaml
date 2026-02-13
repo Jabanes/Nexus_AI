@@ -1,5 +1,5 @@
 # ============================================
-# TENANT CONFIGURATION TEMPLATE
+# TENANT CONFIGURATION TEMPLATE (Hybrid)
 # ============================================
 # Copy this entire directory to create a new tenant.
 # Example: cp -r src/tenants/_template src/tenants/my_business
@@ -14,57 +14,60 @@ tenant_id: "my_business_01"
 voice_settings:
   # Provider: nvidia_personaplex, vapi, elevenlabs
   provider: "nvidia_personaplex"
-  
+
   # Voice ID from your audio provider
-  # For NVIDIA PersonaPlex: Check their voice catalog
-  # For ElevenLabs: Your custom voice ID
   voice_id: "en_us_female_friendly"
-  
+
   # Language code (BCP-47 format)
-  # Examples: en-US, es-ES, fr-FR, de-DE, he-IL
   language: "en-US"
 
-# System prompt that defines the AI assistant's personality and behavior
-# This is the most important configuration - be specific and clear
+# ─── Identity & Behavior ─────────────────────────────────
+# WHO the agent is and HOW it behaves.
+# Keep this focused on personality, role, tone, and rules.
+# Do NOT put factual data (prices, hours) here — use knowledge_base.
 system_prompt: |
   You are a helpful virtual assistant for [YOUR BUSINESS NAME].
-  
+
   Your role:
   - Answer customer questions politely and accurately
   - Help customers with [SPECIFIC TASKS]
   - Keep responses concise and conversational
-  
+
   Guidelines:
   - Be warm but professional
   - Use simple language
   - Confirm details before taking actions
-  - If you don't know something, admit it - don't make up information
-  
-  Business Information:
-  - Operating hours: [HOURS]
-  - Location: [ADDRESS]
-  - Specialty: [WHAT YOU'RE KNOWN FOR]
+  - If you don't know something, admit it — don't make up information
+  - Always refer to the business information provided in your knowledge base
 
-# List of tools (functions) available to this assistant
-# Tool names must match the class names in tools.py (converted to snake_case)
-# Example: CheckAvailabilityTool -> "check_availability"
+# ─── Static Knowledge ─────────────────────────────────────
+# WHAT the agent knows — prices, hours, policies, FAQs.
+# This data is automatically injected into the system prompt.
+# Supports nested dicts and lists. Keep it structured.
+knowledge_base:
+  prices:
+    - service: "Basic Service"
+      price: "$50"
+    - service: "Premium Service"
+      price: "$100"
+  business_hours:
+    monday_friday: "09:00-18:00"
+    saturday: "10:00-14:00"
+    sunday: "Closed"
+  location: "123 Main Street, Your City"
+  policies:
+    - "Cancellation up to 24 hours before appointment"
+    - "No refunds on completed services"
+
+# ─── Tools ────────────────────────────────────────────────
+# Tool names must match the class names in tools.py (snake_case)
+# Example: CheckAvailabilityTool → "check_availability"
 enabled_tools:
   - "example_tool"
   # - "another_tool"
-  # Add your tools here
 
 # Optional: Additional metadata
 metadata:
   business_name: "My Business"
   industry: "service"
   contact_email: "support@mybusiness.com"
-  
-# Optional: Custom configuration for your specific needs
-custom_config:
-  # Add any business-specific settings here
-  # Example:
-  # booking_buffer_minutes: 15
-  # max_party_size: 8
-  # working_hours:
-  #   monday: "09:00-18:00"
-  #   tuesday: "09:00-18:00"

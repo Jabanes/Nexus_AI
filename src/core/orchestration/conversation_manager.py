@@ -13,6 +13,7 @@ from typing import Dict, Any, List, Optional
 from src.core.llm.gemini_client import GeminiClient
 from src.core.orchestration.tool_executor import ToolExecutor
 from src.interfaces.base_tool import BaseTool
+from src.core.history import SessionRecorder, FileSessionRepository
 
 logger = logging.getLogger(__name__)
 
@@ -36,7 +37,8 @@ class ConversationSession:
         customer_phone: str,
         chat_session: Any,
         tool_executor: ToolExecutor,
-        system_prompt: str
+        system_prompt: str,
+        session_recorder: SessionRecorder
     ):
         self.session_id = session_id
         self.tenant_id = tenant_id
@@ -44,6 +46,7 @@ class ConversationSession:
         self.chat_session = chat_session
         self.tool_executor = tool_executor
         self.system_prompt = system_prompt
+        self.session_recorder = session_recorder
         self.created_at = None  # Would be datetime in production
         
         logger.info(f"Conversation session created: {session_id}")
@@ -64,6 +67,7 @@ class ConversationManager:
         """Initialize the conversation manager."""
         self.gemini_client = GeminiClient()
         self.active_sessions: Dict[str, ConversationSession] = {}
+        self.session_repository = FileSessionRepository()
         logger.info("ConversationManager initialized")
     
     def create_session(
@@ -95,6 +99,9 @@ class ConversationManager:
         # Initialize tool executor
         tool_executor = ToolExecutor(tools)
         
+        # Initialize session recorder
+        session_recorder = SessionRecorder(tenant_id, session_id)
+        
         # Create session object
         session = ConversationSession(
             session_id=session_id,
@@ -102,7 +109,8 @@ class ConversationManager:
             customer_phone=customer_phone,
             chat_session=chat_session,
             tool_executor=tool_executor,
-            system_prompt=system_prompt
+            system_prompt=system_prompt,
+            session_recorder=session_recorder
         )
         
         # Store in active sessions
@@ -134,6 +142,18 @@ class ConversationManager:
             True if session was closed, False if not found
         """
         if session_id in self.active_sessions:
+            session = self.active_sessions[session_id]
+            
+            # Finalize recording
+            try:
+                session.session_recorder.finalize()
+                asyncio.create_task(self.session_repository.save_session(
+                    session.tenant_id, 
+                    session.session_recorder.export()
+                ))
+            except Exception as e:
+                logger.error(f"Error saving session {session_id}: {e}")
+                
             del self.active_sessions[session_id]
             logger.info(f"Session {session_id} closed")
             return True
@@ -226,6 +246,31 @@ class ConversationManager:
             
             logger.info(f"Message processed successfully. Tools used: {len(tools_used)}")
             
+            # Log user message
+            session.session_recorder.log_user_text(user_message)
+            
+            # Log AI response
+            session.session_recorder.log_ai_text(final_text)
+            
+            # Log tools used
+            for tool in tools_used:
+                session.session_recorder.log_tool_usage(
+                    tool["name"],
+                    {},  # We don't have args easily accessible here without parsing again, or capture earlier
+                    "Success" if tool["success"] else "Failed"
+                )
+            
+            # Save intermediate state
+            # Note: In a real app we might not save every turn to disk to avoid I/O, 
+            # but for this verified prototype it's safer.
+            try:
+                await self.session_repository.save_session(
+                    session.tenant_id, 
+                    session.session_recorder.export()
+                )
+            except Exception as e:
+                logger.error(f"Failed to save session state: {e}")
+
             return {
                 "success": True,
                 "text": final_text,

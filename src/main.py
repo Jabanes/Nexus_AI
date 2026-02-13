@@ -12,6 +12,7 @@ from src.tenants.loader import TenantLoader
 from src.core.orchestration.conversation_manager import ConversationManager
 from src.core.audio.streamer import AudioBridge
 from src.core.history import SessionRecorder, FileSessionRepository
+from src.core.intelligence import PostCallIntelligenceEngine
 
 # 1. Bootstrapping (Env + Logs)
 load_dotenv()
@@ -505,6 +506,23 @@ async def call_endpoint(websocket: WebSocket, tenant_id: str, customer_phone: Op
                 # Save to repository (file system)
                 file_path = await session_repository.save_session(tenant_id, session_data)
                 logger.info(f"💾 Session saved: {file_path}")
+                
+                # Post-call intelligence (non-blocking)
+                try:
+                    intelligence_engine = PostCallIntelligenceEngine()
+                    lead = await intelligence_engine.analyze_session(
+                        session_data,
+                        customer_phone=customer_phone
+                    )
+                    session_data["intelligence"] = lead.model_dump()
+                    # Re-save with intelligence data
+                    await session_repository.save_session(tenant_id, session_data)
+                    logger.info(
+                        f"🧠 Intelligence: intent={lead.core_intent}, "
+                        f"sentiment={lead.sentiment}, outcome={lead.call_outcome}"
+                    )
+                except Exception as e:
+                    logger.warning(f"⚠️ Intelligence analysis failed (non-blocking): {e}")
                 
             except Exception as e:
                 logger.error(f"❌ Failed to save session recording: {e}")
