@@ -157,6 +157,29 @@ Open `test_audio.html` in your browser and click "Start Call".
 
 ---
 
+## ⚙️ Configuration & Performance
+
+### Gemini Transport Protocol (`GEMINI_TRANSPORT`)
+The system supports two transport protocols for communicating with Google Gemini:
+
+1.  **`rest` (Default)**: Uses standard HTTP/1.1 JSON.
+    *   **Pros**: Extremely stable, works on Windows/Mac/Linux, compatible with Uvicorn/Gunicorn.
+    *   **Cons**: Slightly higher latency (negligible for text).
+    *   **Use Case**: Development, Windows production, or ensuring maximum stability.
+
+2.  **`grpc`**: Uses HTTP/2 with Protocol Buffers.
+    *   **Pros**: Lowest possible latency and bandwidth.
+    *   **Cons**: Known compatibility issues with Uvicorn on Windows (causes deadlocks).
+    *   **Use Case**: High-performance Linux/Docker production environments.
+
+**To switch:**
+Set the environment variable in `.env` or Docker config:
+```bash
+GEMINI_TRANSPORT=grpc
+```
+
+---
+
 ## 📚 Documentation
 
 **All documentation is consolidated in one file:**
@@ -185,6 +208,7 @@ Open `test_audio.html` in your browser and click "Start Call".
 
 ✅ **Full-Duplex Audio Streaming** - Real-time bidirectional audio via WebSocket  
 ✅ **Sidecar Pattern** - PersonaPlex runs in external Docker container  
+✅ **Text-Only Fallback** - Transparently handles PersonaPlex unavailability  
 ✅ **Audio Transcoding** - FFmpeg pipeline for WebM ↔ PCM conversion  
 ✅ **Barge-In Detection** - Interrupt AI when user speaks  
 ✅ **Multi-Tenant** - Complete isolation between tenants  
@@ -192,3 +216,24 @@ Open `test_audio.html` in your browser and click "Start Call".
 ✅ **Context-Aware Logging** - Color-coded, tenant-tagged logs  
 ✅ **Error Recovery** - Automatic reconnection with retry logic  
 ✅ **Production-Ready** - Robust error handling throughout
+
+---
+
+## 🛡️ Stability & Graceful Degradation
+
+The Nexus Voice Engine is designed to be "Always-On" even if satellite services fail:
+
+1.  **PersonaPlex Fallback:** If the PersonaPlex sidecar is down or unreachable, the `AudioBridge` automatically degrades to **Text-Only Mode**. The conversation continues via WebSocket text messages until the audio service recovers.
+2.  **Gemini REST Transport:** For environments where GRPC is unstable (like Windows), the engine uses a robust **Async REST Wrapper**. It wraps standard synchronous Gemini REST calls in a high-performance producer thread to maintain non-blocking streaming.
+3.  **Clean Disconnects:** The orchestration logic handles sudden client disconnections or timeouts gracefully, ensuring all background threads and LLM streams are cancelled immediately to prevent resource leaks.
+4.  **Windows Compatibility:** Specific fixes for `starlette` / `uvicorn` race conditions and Windows-specific file system locks (Atomic Replace) are built-in.
+
+---
+
+## 💡 Troubleshooting
+
+*   **"Session not found"**: Ensure you are passing the **Conversation Session ID** (returned in the `connected` message) rather than the raw WebSocket UUID for orchestration calls.
+*   **No audio?**: Check if `PERSONAPLEX_WS_URL` is correct and the mock or real sidecar is running. Look for "Starting model->client stream" in the logs.
+*   **Latency**: Ensure `GEMINI_TRANSPORT=rest` is set if you are on Windows to avoid the GRPC deadlock.
+
+---

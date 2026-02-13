@@ -18,9 +18,11 @@ from typing import Optional, Callable, TYPE_CHECKING
 from enum import Enum
 import websockets
 from fastapi import WebSocket
+from starlette.websockets import WebSocketDisconnect
 
 if TYPE_CHECKING:
     from src.core.history import SessionRecorder
+    from src.core.orchestration.conversation_manager import ConversationManager
 
 logger = logging.getLogger(__name__)
 
@@ -65,6 +67,7 @@ class AudioBridge:
         client_ws: WebSocket,
         tenant_id: str,
         session_id: str,
+        conversation_session_id: str,
         session_recorder: Optional['SessionRecorder'] = None
     ):
         """
@@ -73,13 +76,19 @@ class AudioBridge:
         Args:
             client_ws: FastAPI WebSocket connection from client
             tenant_id: Tenant identifier for logging/routing
-            session_id: Unique session identifier
+            session_id: Unique session identifier (WebSocket/call level)
+            conversation_session_id: The ConversationManager session ID (for LLM calls)
             session_recorder: Optional SessionRecorder for capturing conversation history
         """
         self.client_ws = client_ws
         self.tenant_id = tenant_id
         self.session_id = session_id
+        self.conversation_session_id = conversation_session_id
         self.recorder = session_recorder
+        
+        # Helper to avoid circular imports if possible, or dependency injection
+        from src.main import conversation_manager
+        self.conversation_manager = conversation_manager
         
         # PersonaPlex connection
         self.model_ws: Optional[websockets.WebSocketClientProtocol] = None
@@ -123,55 +132,67 @@ class AudioBridge:
         max_attempts = int(os.getenv("PERSONAPLEX_MAX_RECONNECT_ATTEMPTS", "3"))
         retry_delay = int(os.getenv("PERSONAPLEX_RECONNECT_DELAY", "2"))
         
-        for attempt in range(1, max_attempts + 1):
-            try:
-                logger.info(
-                    f"Connecting to PersonaPlex (attempt {attempt}/{max_attempts}): "
-                    f"{self.model_url}"
-                )
+        try:
+            for attempt in range(1, max_attempts + 1):
+                try:
+                    logger.info(
+                        f"Connecting to PersonaPlex (attempt {attempt}/{max_attempts}): "
+                        f"{self.model_url}"
+                    )
+                    
+                    self.model_state = ConnectionState.CONNECTING
+                    
+                    # Attempt WebSocket connection with timeout
+                    try:
+                        self.model_ws = await asyncio.wait_for(
+                            websockets.connect(
+                                self.model_url,
+                                ping_interval=30,
+                                ping_timeout=10,
+                                close_timeout=5
+                            ),
+                            timeout=timeout
+                        )
+                    except asyncio.TimeoutError:
+                        logger.error(f"PersonaPlex connection timeout (attempt {attempt})")
+                        self.model_state = ConnectionState.ERROR
+                        if attempt < max_attempts:
+                            await asyncio.sleep(retry_delay)
+                        continue
+                    
+                    self.model_state = ConnectionState.CONNECTED
+                    logger.info(f"Successfully connected to PersonaPlex: {self.model_url}")
+                    return True
+                    
+                except ConnectionRefusedError:
+                    logger.error(
+                        f"PersonaPlex connection refused (attempt {attempt}). "
+                        f"Is the Docker container running?"
+                    )
+                    self.model_state = ConnectionState.ERROR
+                    
+                except Exception as e:
+                    logger.exception(f"PersonaPlex connection error (attempt {attempt}): {e}")
+                    self.model_state = ConnectionState.ERROR
                 
-                self.model_state = ConnectionState.CONNECTING
-                
-                # Attempt WebSocket connection with timeout
-                self.model_ws = await asyncio.wait_for(
-                    websockets.connect(
-                        self.model_url,
-                        ping_interval=30,
-                        ping_timeout=10,
-                        close_timeout=5
-                    ),
-                    timeout=timeout
-                )
-                
-                self.model_state = ConnectionState.CONNECTED
-                logger.info(f"Successfully connected to PersonaPlex: {self.model_url}")
-                return
-                
-            except asyncio.TimeoutError:
-                logger.error(f"PersonaPlex connection timeout (attempt {attempt})")
-                self.model_state = ConnectionState.ERROR
-                
-            except ConnectionRefusedError:
-                logger.error(
-                    f"PersonaPlex connection refused (attempt {attempt}). "
-                    f"Is the Docker container running?"
-                )
-                self.model_state = ConnectionState.ERROR
-                
-            except Exception as e:
-                logger.exception(f"PersonaPlex connection error (attempt {attempt}): {e}")
-                self.model_state = ConnectionState.ERROR
+                # Wait before retry (except on last attempt)
+                if attempt < max_attempts:
+                    await asyncio.sleep(retry_delay)
             
-            # Wait before retry (except on last attempt)
-            if attempt < max_attempts:
-                await asyncio.sleep(retry_delay)
-        
-        # All attempts failed
-        raise ConnectionError(
-            f"Failed to connect to PersonaPlex after {max_attempts} attempts. "
-            f"Ensure Docker container is running at {self.model_url}"
-        )
-    
+            # If loop finishes, all attempts failed
+            logger.warning(
+                f"Failed to connect to PersonaPlex after {max_attempts} attempts. "
+                "Ensure Docker container is running."
+            )
+            self.model_ws = None
+            return False
+
+        except Exception as e:
+            logger.warning(f"Unexpected error connecting to PersonaPlex: {e}")
+            logger.warning("Continuing in TEXT-ONLY mode (No TTS/Audio).")
+            self.model_ws = None
+            return False
+            
     async def disconnect_model(self):
         """Gracefully disconnect from PersonaPlex."""
         if self.model_ws:
@@ -303,65 +324,91 @@ class AudioBridge:
             logger.exception(f"Audio encoding error: {e}")
             return b""
     
-    async def handle_client_to_model(self):
+    async def handle_client_input(self):
         """
-        Stream audio from client to PersonaPlex model.
+        Handle input from client (Text or Audio).
         
-        This coroutine:
-        1. Receives audio from client WebSocket
-        2. Transcodes to PCM
-        3. Sends to PersonaPlex
-        4. Implements barge-in detection
+        For Text: Routes to ConversationManager -> TTS
+        For Audio: Routes to ASR (Future) -> ConversationManager -> TTS
         """
-        logger.info("Starting client->model audio stream")
+        logger.info("Starting client input handler")
         
         try:
             while self.is_running:
                 try:
-                    # Receive audio from client
-                    data = await asyncio.wait_for(
-                        self.client_ws.receive_bytes(),
+                    # Receive data (Text or Bytes)
+                    message = await asyncio.wait_for(
+                        self.client_ws.receive(),
                         timeout=1.0
                     )
                     
-                    if not data:
-                        continue
+                    # Check for disconnect message from ASGI layer
+                    if message["type"] == "websocket.disconnect":
+                        logger.info("Client sent disconnect message")
+                        self.is_running = False
+                        break
                     
-                    # Mark client as speaking (for barge-in detection)
-                    self.is_client_speaking = True
-                    
-                    # Transcode to PCM for PersonaPlex
-                    pcm_data = await self.transcode_to_pcm(
-                        data, 
-                        AudioFormat.WEBM_OPUS
-                    )
-                    
-                    if pcm_data and self.model_ws:
-                        # Send to PersonaPlex
-                        await self.model_ws.send(pcm_data)
-                        logger.debug(f"Sent {len(pcm_data)} bytes to PersonaPlex")
-                        
-                        # Log to session recorder
-                        if self.recorder:
-                            # Estimate duration: PCM 16-bit @ sample_rate
-                            # bytes / (2 bytes_per_sample * channels * sample_rate) * 1000 = ms
-                            duration_ms = int((len(pcm_data) / (2 * self.channels * self.sample_rate)) * 1000)
-                            self.recorder.log_user_audio(duration_ms, len(data))
-                    
-                    # Reset speaking flag after short delay
-                    await asyncio.sleep(0.1)
-                    self.is_client_speaking = False
-                    
+                    elif message["type"] == "websocket.receive":
+                        if "text" in message:
+                            # Handle TEXT input (e.g. from Web/Mobile Client)
+                            import json
+                            try:
+                                payload = json.loads(message["text"])
+                                if payload.get("type") == "message":
+                                    user_text = payload.get("content")
+                                    await self.process_conversation_turn(user_text)
+                            except json.JSONDecodeError:
+                                logger.warning(f"Received invalid JSON text: {message['text']}")
+                                
+                        elif "bytes" in message:
+                            # Handle AUDIO input
+                            # TODO: Send to ASR service to get text
+                            pass
+                            
                 except asyncio.TimeoutError:
-                    # No data received, continue
                     continue
-                    
-                except Exception as e:
-                    logger.error(f"Error in client->model stream: {e}")
+                except (WebSocketDisconnect, RuntimeError) as e:
+                    # Client disconnected gracefully
+                    logger.info(f"Client disconnected: {e}")
+                    self.is_running = False
                     break
-                    
+                except Exception as e:
+                    logger.exception(f"Error in client input handler: {e}")
+                    self.is_running = False
+                    break
         finally:
-            logger.info("Client->model stream ended")
+            logger.info("Client input handler ended")
+
+    async def process_conversation_turn(self, user_text: str):
+        """
+        Process a text turn through the Brain (ConversationManager).
+        """
+        logger.info(f"Processing turn: {user_text}")
+        
+        # 1. Stream response from Brain
+        stream = self.conversation_manager.process_message_stream(
+            self.conversation_session_id,
+            user_text
+        )
+        
+        async for chunk in stream:
+            # 2. Send text back to client (for UI)
+            if chunk["type"] == "text":
+                await self.client_ws.send_json({
+                    "type": "response_part",
+                    "content": chunk["content"]
+                })
+                
+                # 3. Send text to TTS (PersonaPlex)
+                # TODO: Implement TTS streaming call here
+                # await self.send_to_tts(chunk["content"])
+            
+            elif chunk["type"] == "error":
+                await self.client_ws.send_json(chunk)
+
+    # Replaces handle_client_to_model
+    async def handle_client_to_model(self):
+        return await self.handle_client_input()
     
     async def handle_model_to_client(self):
         """
@@ -376,7 +423,12 @@ class AudioBridge:
         logger.info("Starting model->client audio stream")
         
         try:
-            while self.is_running and self.model_ws:
+            while self.is_running:
+                if not self.model_ws:
+                    # In text-mode, just wait for termination
+                    await asyncio.sleep(1)
+                    continue
+                
                 try:
                     # Receive PCM audio from PersonaPlex
                     pcm_data = await asyncio.wait_for(
@@ -463,6 +515,9 @@ class AudioBridge:
                 self.tasks,
                 return_when=asyncio.FIRST_COMPLETED
             )
+            
+            # Signal shutdown to all tasks
+            self.is_running = False
             
             # Cancel remaining tasks
             for task in pending:

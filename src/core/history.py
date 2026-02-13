@@ -303,8 +303,8 @@ class FileSessionRepository(ISessionRepository):
             with open(temp_path, 'w', encoding='utf-8') as f:
                 json.dump(session_data, f, indent=2, ensure_ascii=False)
             
-            # Rename to final path (atomic on most filesystems)
-            temp_path.rename(file_path)
+            # Replace final path (atomic and overwrites on Windows if using .replace)
+            temp_path.replace(file_path)
             
             logger.info(f"[{tenant_id}:{session_id}] Session saved to: {file_path}")
             return str(file_path)

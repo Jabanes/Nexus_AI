@@ -9,7 +9,8 @@ This module is the heart of the voice engine. It:
 """
 import logging
 import uuid
-from typing import Dict, Any, List, Optional
+import asyncio
+from typing import Dict, Any, List, Optional, AsyncGenerator
 from src.core.llm.gemini_client import GeminiClient
 from src.core.orchestration.tool_executor import ToolExecutor
 from src.interfaces.base_tool import BaseTool
@@ -93,8 +94,7 @@ class ConversationManager:
         logger.info(f"Creating new session for tenant: {tenant_id}")
         
         # Initialize Gemini chat session
-        model = self.gemini_client.create_chat_session(system_prompt, tools)
-        chat_session = model.start_chat()
+        chat_session = self.gemini_client.create_chat_session(system_prompt, tools)
         
         # Initialize tool executor
         tool_executor = ToolExecutor(tools)
@@ -287,6 +287,119 @@ class ConversationManager:
                 "tools_used": []
             }
     
+    async def process_message_stream(
+        self,
+        session_id: str,
+        user_message: str
+    ) -> AsyncGenerator[Dict[str, Any], None]:
+        """
+        Stream-process a user message, handling tool calls automatically.
+        
+        Yields:
+            Chunks of text or control messages.
+            {"type": "text", "content": "..."}
+            {"type": "error", "error": "..."}
+        """
+        logger.info(f"Stream-processing message for session: {session_id}")
+        
+        session = self.get_session(session_id)
+        if not session:
+            yield {"type": "error", "error": "Session not found"}
+            return
+
+        # Log user message
+        session.session_recorder.log_user_text(user_message)
+
+        # Track full response for logging
+        full_response_text = ""
+        tools_executed = []
+        
+        try:
+            # Initial request
+            stream = self.gemini_client.send_message_stream(
+                session.chat_session, 
+                user_message
+            )
+            
+            # Loop for handling tool calls (multi-turn within one user request)
+            while True:
+                tool_call_found = None
+                
+                async for chunk in stream:
+                    if chunk["type"] == "text":
+                        content = chunk["content"]
+                        full_response_text += content
+                        yield chunk
+                    
+                    elif chunk["type"] == "function_call":
+                        # We found a tool call. 
+                        # Note: Gemini might yield multiple chunks, but usually the function call 
+                        # comes at the end. We'll capture it and break the inner loop 
+                        # to execute it, then "re-enter" the stream with the result.
+                        tool_call_found = chunk["call"]
+                        # We break here to execute the tool. 
+                        # NOTE: If there are multiple tool calls in one turn, 
+                        # we might need to collect them all? 
+                        # GeminiClient.stream implementation yields one call per chunk if detected.
+                        # We'll assume sequential execution for now or list handling.
+                        break
+                    
+                    elif chunk["type"] == "error":
+                        yield chunk
+                        return
+
+                if tool_call_found:
+                    # Execute tool
+                    tool_name = tool_call_found["name"]
+                    tool_args = tool_call_found["args"]
+                    logger.info(f"Executing tool during stream: {tool_name}")
+                    
+                    execution_result = await session.tool_executor.execute_tool(
+                        tool_name,
+                        tool_args
+                    )
+                    
+                    tools_executed.append({
+                        "name": tool_name,
+                        "success": execution_result["success"]
+                    })
+                    
+                    session.session_recorder.log_tool_usage(
+                        tool_name, 
+                        tool_args, 
+                        str(execution_result["result"])
+                    )
+
+                    # Send result back to Gemini and get NEW stream
+                    result_payload = execution_result["result"] if execution_result["success"] else f"Error: {execution_result['error']}"
+                    
+                    stream = self.gemini_client.send_function_response_stream(
+                        session.chat_session,
+                        tool_name,
+                        result_payload
+                    )
+                    # Continue the outer while loop to consume the new stream
+                    continue
+                else:
+                    # No function call found in this stream, so the turn is complete.
+                    break
+            
+            # Log final AI response
+            session.session_recorder.log_ai_text(full_response_text)
+            
+            # Save session
+            try:
+                await self.session_repository.save_session(
+                    session.tenant_id, 
+                    session.session_recorder.export()
+                )
+            except Exception as e:
+                logger.error(f"Failed to save session state: {e}")
+                
+        except Exception as e:
+            logger.exception(f"Error in process_message_stream: {e}")
+            yield {"type": "error", "error": str(e)}
+
     def get_active_session_count(self) -> int:
         """
         Get the number of active sessions.

@@ -351,6 +351,7 @@ async def call_endpoint(websocket: WebSocket, tenant_id: str, customer_phone: Op
     audio_bridge = None
     session_recorder = None
     session_repository = None
+    conversation_session = None
     
     try:
         # Generate session ID
@@ -425,6 +426,7 @@ async def call_endpoint(websocket: WebSocket, tenant_id: str, customer_phone: Op
                 client_ws=websocket,
                 tenant_id=tenant_id,
                 session_id=session_id,
+                conversation_session_id=conversation_session.session_id,
                 session_recorder=session_recorder
             )
             
@@ -495,13 +497,22 @@ async def call_endpoint(websocket: WebSocket, tenant_id: str, customer_phone: Op
                 logger.error(f"Error stopping audio bridge: {e}")
         
         # Finalize and save session recording
-        if session_recorder and session_repository:
+        # Use the ConversationManager's recorder (has actual conversation data)
+        # Fall back to the main.py-level recorder if CM session unavailable
+        effective_recorder = session_recorder
+        if conversation_session:
+            conv_sess = conversation_manager.get_session(conversation_session.session_id)
+            if conv_sess and conv_sess.session_recorder:
+                effective_recorder = conv_sess.session_recorder
+                logger.debug("Using ConversationManager's session recorder for persistence")
+        
+        if effective_recorder and session_repository:
             try:
                 # Finalize the session (marks end time, calculates duration)
-                session_recorder.finalize(status="COMPLETED")
+                effective_recorder.finalize(status="COMPLETED")
                 
                 # Export session data
-                session_data = session_recorder.export()
+                session_data = effective_recorder.export()
                 
                 # Save to repository (file system)
                 file_path = await session_repository.save_session(tenant_id, session_data)
@@ -527,10 +538,10 @@ async def call_endpoint(websocket: WebSocket, tenant_id: str, customer_phone: Op
             except Exception as e:
                 logger.error(f"❌ Failed to save session recording: {e}")
         
-        # Close conversation session
-        if session_id:
+        # Close conversation session (uses conversation session ID, not WebSocket ID)
+        if conversation_session:
             try:
-                conversation_manager.close_session(session_id)
+                conversation_manager.close_session(conversation_session.session_id)
             except:
                 pass
         
