@@ -81,8 +81,8 @@ class GeminiClient:
             # In the new SDK, tools are passed as a list of types.Tool
             config_kwargs["tools"] = [types.Tool(function_declarations=function_declarations)]
         
-        # Note: Chat session is stateful in the new SDK too
-        chat = self.client.chats.create(
+        # FIX: Use 'client.aio' for Async Chat creation
+        chat = self.client.aio.chats.create(
             model=self.model_name,
             config=types.GenerateContentConfig(**config_kwargs)
         )
