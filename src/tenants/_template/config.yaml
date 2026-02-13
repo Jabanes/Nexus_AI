@@ -16,7 +16,7 @@ voice_settings:
   provider: "nvidia_personaplex"
 
   # Voice ID from your audio provider
-  voice_id: "en_us_female_friendly"
+  voice_id: "NATM0.pt"
 
   # Language code (BCP-47 format)
   language: "en-US"

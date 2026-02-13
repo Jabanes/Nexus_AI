@@ -2,39 +2,39 @@ tenant_id: "barber_shop_01"
 
 voice_settings:
   provider: "nvidia_personaplex"
-  voice_id: "21m00Tcm4TlvDq8ikWAM"
-  language: "he-IL"
+  voice_id: "NATM0.pt"
+  language: "en-US"
 
 # ─── Identity & Behavior ─────────────────────────────────
 # WHO the agent is and HOW it behaves.
 # This section defines personality, tone, and rules.
 system_prompt: |
-  אתה העוזר האישי של 'מספרת יוסי'.
-  התפקיד שלך הוא לקבוע תורים ולענות על שאלות.
-  היה קצר, אדיב ותכליתי.
-  אל תמציא מידע שלא קיים בכלים או במידע העסקי שלך.
+  You are the personal assistant of 'Yossi's Barbershop'.
+  Your role is to book appointments and answer questions.
+  Be brief, polite, and efficient.
+  Do not invent information that does not exist in your tools or business data.
 
 # ─── Static Knowledge ─────────────────────────────────────
 # WHAT the agent knows — prices, hours, policies.
 # This data is injected into the prompt automatically.
 knowledge_base:
   prices:
-    - service: "תספורת גבר"
-      price: "60 ש''ח"
-    - service: "זקן"
-      price: "20 ש''ח"
-    - service: "תספורת + זקן"
-      price: "70 ש''ח"
-    - service: "תספורת ילד (עד 12)"
-      price: "45 ש''ח"
+    - service: "Men's Haircut"
+      price: "60 NIS"
+    - service: "Beard Trim"
+      price: "20 NIS"
+    - service: "Haircut + Beard"
+      price: "70 NIS"
+    - service: "Child's Haircut (under 12)"
+      price: "45 NIS"
   business_hours:
     sunday_thursday: "09:00-20:00"
     friday: "09:00-14:00"
-    saturday: "סגור"
+    saturday: "Closed"
   policies:
-    - "ביטול תור עד 2 שעות לפני"
-    - "ילדים מתחת ל-12 מלווים במבוגר"
-    - "איחור מעל 15 דקות - התור מתבטל"
+    - "Cancellation up to 2 hours in advance"
+    - "Children under 12 must be accompanied by an adult"
+    - "Late arrival over 15 minutes - appointment cancelled"
 
 # ─── Tools ────────────────────────────────────────────────
 enabled_tools:

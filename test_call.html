@@ -1,397 +1,201 @@
 <!DOCTYPE html>
 <html lang="en">
-
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Nexus Call Tester</title>
+    <title>Nexus Diagnostic Client</title>
     <style>
-        body {
-            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
-            max-width: 800px;
-            margin: 2rem auto;
-            padding: 0 1rem;
-            background-color: #f4f4f5;
-            color: #18181b;
-        }
+        body { font-family: monospace; background: #111; color: #eee; padding: 2rem; }
+        .card { background: #222; padding: 1.5rem; border-radius: 8px; margin-bottom: 1rem; border: 1px solid #333; }
+        h1, h2 { margin-top: 0; }
+        button { padding: 10px 20px; cursor: pointer; font-weight: bold; margin-right: 10px; }
+        .green { background: #0f0; color: #000; border: none; }
+        .red { background: #f00; color: #fff; border: none; }
+        input, select { padding: 8px; background: #333; color: #fff; border: 1px solid #555; width: 100%; box-sizing: border-box; margin-bottom: 10px; }
+        
+        /* Meters */
+        .meter-container { display: flex; align-items: center; margin: 10px 0; }
+        .meter-label { width: 100px; }
+        .meter-bar-bg { flex-grow: 1; height: 10px; background: #333; border-radius: 5px; overflow: hidden; }
+        .meter-bar-fill { height: 100%; width: 0%; transition: width 0.1s; }
+        #mic-fill { background: #0cf; }
+        #spk-fill { background: #f0c; }
 
-        .card {
-            background: white;
-            padding: 2rem;
-            border-radius: 12px;
-            box-shadow: 0 4px 6px -1px rgb(0 0 0 / 0.1);
-            margin-bottom: 2rem;
-        }
-
-        h1 {
-            margin-top: 0;
-            font-size: 1.5rem;
-            color: #27272a;
-        }
-
-        .control-group {
-            margin-bottom: 1.5rem;
-        }
-
-        label {
-            display: block;
-            font-weight: 500;
-            margin-bottom: 0.5rem;
-            color: #52525b;
-        }
-
-        select,
-        input {
-            width: 100%;
-            padding: 0.75rem;
-            border: 1px solid #d4d4d8;
-            border-radius: 6px;
-            font-size: 1rem;
-            margin-bottom: 0.5rem;
-            box-sizing: border-box;
-        }
-
-        button {
-            background-color: #2563eb;
-            color: white;
-            border: none;
-            padding: 0.75rem 1.5rem;
-            border-radius: 6px;
-            font-weight: 600;
-            cursor: pointer;
-            transition: opacity 0.2s;
-        }
-
-        button:hover {
-            opacity: 0.9;
-        }
-
-        button:disabled {
-            background-color: #a1a1aa;
-            cursor: not-allowed;
-        }
-
-        button.stop {
-            background-color: #dc2626;
-        }
-
-        .status {
-            margin-top: 1rem;
-            padding: 0.75rem;
-            border-radius: 6px;
-            background: #e4e4e7;
-            font-family: monospace;
-        }
-
-        .status.connected {
-            background: #dcfce7;
-            color: #166534;
-        }
-
-        .status.disconnected {
-            background: #fee2e2;
-            color: #991b1b;
-        }
-
-        #log-container {
-            height: 300px;
-            overflow-y: auto;
-            background: #27272a;
-            color: #a1a1aa;
-            padding: 1rem;
-            border-radius: 8px;
-            font-family: monospace;
-            font-size: 0.875rem;
-        }
-
-        .log-entry {
-            margin-bottom: 0.5rem;
-            border-bottom: 1px solid #3f3f46;
-            padding-bottom: 0.25rem;
-        }
-
-        .log-entry.sent {
-            color: #60a5fa;
-        }
-
-        .log-entry.received {
-            color: #4ade80;
-        }
-
-        .log-entry.error {
-            color: #f87171;
-        }
-
-        .log-time {
-            color: #52525b;
-            font-size: 0.75rem;
-            margin-right: 0.5rem;
-        }
-
-        code {
-            background: #18181b;
-            padding: 0.2rem 0.4rem;
-            border-radius: 4px;
-            color: #e4e4e7;
-        }
+        #logs { height: 300px; overflow-y: auto; background: #000; border: 1px solid #444; padding: 10px; font-size: 12px; }
+        .log-rx { color: #0f0; }
+        .log-tx { color: #0cf; }
+        .log-err { color: #f00; }
+        .log-info { color: #ff0; }
     </style>
 </head>
-
 <body>
     <div class="card">
-        <h1>🎙️ Nexus Call Tester</h1>
-
-        <div class="control-group">
-            <label for="tenantSelect">Select Tenant</label>
-            <select id="tenantSelect" disabled>
-                <option value="">Loading tenants...</option>
-            </select>
-            <button id="refreshTenants"
-                style="margin-top:0.5rem; font-size:0.8rem; padding:0.4rem 0.8rem; background:#52525b;">Refresh
-                List</button>
+        <h1>🎙️ Nexus Diagnostic Client</h1>
+        <label>Tenant ID</label>
+        <select id="tenantSelect"><option value="barber_shop_demo">barber_shop_demo</option></select>
+        
+        <label>Status: <span id="status">Disconnected</span></label>
+        
+        <div class="meter-container">
+            <span class="meter-label">🎤 Mic</span>
+            <div class="meter-bar-bg"><div id="mic-fill" class="meter-bar-fill"></div></div>
+        </div>
+        <div class="meter-container">
+            <span class="meter-label">🔊 Speaker</span>
+            <div class="meter-bar-bg"><div id="spk-fill" class="meter-bar-fill"></div></div>
         </div>
 
-        <div class="control-group">
-            <label for="customerPhone">Customer Phone (Simulation)</label>
-            <input type="text" id="customerPhone" value="+972500000000">
+        <div style="margin-top: 20px;">
+            <button id="btnConnect" class="green" onclick="startCall()">Start Call</button>
+            <button id="btnDisconnect" class="red" onclick="stopCall()" disabled>Stop</button>
         </div>
-
-        <div class="control-group">
-            <label>WebSocket URL Preview</label>
-            <code id="wsUrlPreview"
-                style="display:block; padding:1rem; word-break:break-all;">Wait for selection...</code>
-        </div>
-
-        <div style="display: flex; gap: 1rem;">
-            <button id="startBtn" disabled>Start Call</button>
-            <button id="stopBtn" class="stop" disabled>Stop Call</button>
-        </div>
-
-        <div id="status" class="status disconnected">State: Idle</div>
     </div>
 
-    <div class="card">
-        <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:1rem;">
-            <h2 style="margin:0; font-size:1.1rem;">Live Logs</h2>
-            <button onclick="document.getElementById('log-container').innerHTML=''"
-                style="font-size:0.8rem; padding:0.4rem 0.8rem; background:#52525b;">Clear</button>
-        </div>
-        <div id="log-container"></div>
-    </div>
+    <div id="logs"></div>
 
     <script>
-        // --- State ---
+        // --- CONFIG ---
+        const SAMPLE_RATE = 24000; // Must match Server Output
+        
+        // --- STATE ---
         let ws = null;
-        let mediaRecorder = null;
-        let audioContext = null;
-        let stream = null;
-        const CONFIG = {
-            chunkSize: 100 // ms
-        };
+        let audioCtx = null;
+        let nextTime = 0;
+        let mediaStream = null;
+        let recorder = null;
 
-        // --- DOM Elements ---
-        const tenantSelect = document.getElementById('tenantSelect');
-        const phoneInput = document.getElementById('customerPhone');
-        const wsPreview = document.getElementById('wsUrlPreview');
-        const startBtn = document.getElementById('startBtn');
-        const stopBtn = document.getElementById('stopBtn');
-        const statusDiv = document.getElementById('status');
-        const refreshBtn = document.getElementById('refreshTenants');
+        // --- UI ---
+        const logDiv = document.getElementById('logs');
+        const micFill = document.getElementById('mic-fill');
+        const spkFill = document.getElementById('spk-fill');
 
-        // --- Initialization ---
-        async function loadTenants() {
-            try {
-                // Assuming the API is running on localhost:8000
-                const response = await fetch('http://localhost:8000/tenants');
-                if (!response.ok) throw new Error(`HTTP ${response.status}`);
-                const data = await response.json();
-
-                tenantSelect.innerHTML = '<option value="">-- Select Tenant --</option>';
-                data.tenants.forEach(t => {
-                    const opt = document.createElement('option');
-                    opt.value = t;
-                    opt.textContent = t;
-                    tenantSelect.appendChild(opt);
-                });
-
-                tenantSelect.disabled = false;
-
-                // Restore previous selection
-                const saved = localStorage.getItem('nexus_last_tenant');
-                if (saved && data.tenants.includes(saved)) {
-                    tenantSelect.value = saved;
-                    updatePreview();
-                }
-            } catch (err) {
-                log(`Failed to load tenants: ${err.message}`, 'error');
-            }
+        function log(msg, type = 'info') {
+            const el = document.createElement('div');
+            el.className = `log-${type}`;
+            el.innerText = `[${new Date().toLocaleTimeString()}] ${msg}`;
+            logDiv.appendChild(el);
+            logDiv.scrollTop = logDiv.scrollHeight;
         }
 
-        function getWsUrl() {
-            const tenant = tenantSelect.value;
-            const phone = encodeURIComponent(phoneInput.value);
-            // Protocol check: if page is https, use wss. Otherwise ws.
-            const protocol = location.protocol === 'https:' ? 'wss:' : 'ws:';
-            // FIX: Point explicitly to the API server port 8000
-            const host = 'localhost:8000';
-            return `${protocol}//${host}/ws/call/${tenant}?customer_phone=${phone}`;
-        }
-
-        function updatePreview() {
-            if (!tenantSelect.value) {
-                wsPreview.textContent = 'Select a tenant to verify URL';
-                startBtn.disabled = true;
-                return;
-            }
-            wsPreview.textContent = getWsUrl();
-            startBtn.disabled = false;
-            localStorage.setItem('nexus_last_tenant', tenantSelect.value);
-        }
-
-        // --- Audio Handling ---
-        async function startAudioCapture() {
-            try {
-                stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-                // Use Opus/WebM for efficient streaming
-                const mimeType = 'audio/webm;codecs=opus';
-
-                if (!MediaRecorder.isTypeSupported(mimeType)) {
-                    throw new Error(`${mimeType} not supported on this browser.`);
-                }
-
-                mediaRecorder = new MediaRecorder(stream, { mimeType });
-
-                mediaRecorder.ondataavailable = (event) => {
-                    if (event.data.size > 0 && ws && ws.readyState === WebSocket.OPEN) {
-                        ws.send(event.data);
-                    }
-                };
-
-                mediaRecorder.start(CONFIG.chunkSize);
-            } catch (err) {
-                log(`Microphone error: ${err.message}`, 'error');
-                stopCall();
-            }
-        }
-
-        function playAudioChunk(arrayBuffer) {
-            // Decoding binary audio data for playback
-            // In a real app, you might use a queue to prevent playback gaps
-            // This simple implementation decodes each chunk individually
-            if (!audioContext) {
-                audioContext = new (window.AudioContext || window.webkitAudioContext)();
+        async function startCall() {
+            // 1. Setup Audio Context (Must be user triggered)
+            audioCtx = new (window.AudioContext || window.webkitAudioContext)({ sampleRate: SAMPLE_RATE });
+            log(`AudioContext created. State: ${audioCtx.state}`, 'info');
+            
+            // Resume if suspended (Browser Policy)
+            if (audioCtx.state === 'suspended') {
+                await audioCtx.resume();
+                log(`AudioContext resumed. New State: ${audioCtx.state}`, 'info');
             }
 
-            audioContext.decodeAudioData(arrayBuffer, (buffer) => {
-                const source = audioContext.createBufferSource();
-                source.buffer = buffer;
-                source.connect(audioContext.destination);
-                source.start(0);
-            }, (err) => log(`Audio decode error: ${err.message}`, 'error'));
-        }
-
-        // --- WebSocket Logic ---
-        function startCall() {
-            if (!tenantSelect.value) return;
-
-            const url = getWsUrl();
-            log(`Connecting to ${url}...`, 'sent');
-
-            ws = new WebSocket(url);
-            ws.binaryType = 'arraybuffer'; // Crucial for receiving audio
+            // 2. Setup WebSocket
+            const tenant = document.getElementById('tenantSelect').value;
+            const wsUrl = `ws://localhost:8000/ws/call/${tenant}?customer_phone=test`;
+            
+            ws = new WebSocket(wsUrl);
+            ws.binaryType = 'arraybuffer';
 
             ws.onopen = () => {
-                setStatus('Connected', 'connected');
-                startBtn.disabled = true;
-                stopBtn.disabled = false;
-                tenantSelect.disabled = true;
-                phoneInput.disabled = true;
-
-                log('WS Open. Starting microphone...', 'sent');
-                startAudioCapture();
+                document.getElementById('status').innerText = 'Connected';
+                document.getElementById('btnConnect').disabled = true;
+                document.getElementById('btnDisconnect').disabled = false;
+                log('WS Connected', 'info');
+                startMic();
             };
 
             ws.onmessage = async (event) => {
-                const data = event.data;
-
-                if (typeof data === 'string') {
-                    // Text Log (JSON)
-                    try {
-                        const json = JSON.parse(data);
-                        log(`SERVER: ${JSON.stringify(json, null, 2)}`, 'received');
-
-                        if (json.type === 'call_end') {
-                            stopCall();
-                        }
-                    } catch {
-                        log(`SERVER (Text): ${data}`, 'received');
-                    }
-                } else if (data instanceof ArrayBuffer) {
-                    // Binary Audio
-                    log(`Received Audio Chunk (${data.byteLength} bytes)`, 'received');
-                    playAudioChunk(data);
+                if (event.data instanceof ArrayBuffer) {
+                    // AUDIO RECEIVED
+                    playPcm(event.data);
+                    visualizeSpeaker();
+                } else {
+                    // TEXT RECEIVED
+                    log(`MSG: ${event.data}`, 'rx');
                 }
             };
 
-            ws.onclose = (event) => {
-                setStatus(`Disconnected (Code: ${event.code})`, 'disconnected');
-                stopCallUI();
-            };
+            ws.onclose = () => stopCall();
+            ws.onerror = (e) => log('WS Error', 'err');
+        }
 
-            ws.onerror = (error) => {
-                log('WebSocket Error check console', 'error');
-                console.error(error);
-            };
+        async function startMic() {
+            try {
+                mediaStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+                
+                // Visualization
+                const micCtx = new AudioContext();
+                const source = micCtx.createMediaStreamSource(mediaStream);
+                const analyser = micCtx.createAnalyser();
+                source.connect(analyser);
+                visualizeMic(analyser);
+
+                // Recording (Send as WebM/Opus)
+                recorder = new MediaRecorder(mediaStream, { mimeType: 'audio/webm;codecs=opus' });
+                
+                recorder.ondataavailable = (e) => {
+                    if (e.data.size > 0 && ws && ws.readyState === 1) {
+                        ws.send(e.data); // Send to Server
+                    }
+                };
+                
+                recorder.start(100); // 100ms chunks
+                log('Microphone started', 'info');
+
+            } catch (e) {
+                log(`Mic Error: ${e.message}`, 'err');
+            }
+        }
+
+        function playPcm(arrayBuffer) {
+            // Convert s16le -> float32
+            const int16 = new Int16Array(arrayBuffer);
+            const float32 = new Float32Array(int16.length);
+            for(let i=0; i<int16.length; i++) float32[i] = int16[i] / 32768;
+
+            // Schedule
+            const buffer = audioCtx.createBuffer(1, float32.length, SAMPLE_RATE);
+            buffer.copyToChannel(float32, 0);
+            
+            const source = audioCtx.createBufferSource();
+            source.buffer = buffer;
+            source.connect(audioCtx.destination);
+            
+            const now = audioCtx.currentTime;
+            nextTime = Math.max(now, nextTime);
+            source.start(nextTime);
+            nextTime += buffer.duration;
         }
 
         function stopCall() {
-            if (mediaRecorder && mediaRecorder.state !== 'inactive') {
-                mediaRecorder.stop();
+            if(ws) ws.close();
+            if(recorder) recorder.stop();
+            if(mediaStream) mediaStream.getTracks().forEach(t => t.stop());
+            if(audioCtx) audioCtx.close();
+            
+            document.getElementById('status').innerText = 'Disconnected';
+            document.getElementById('btnConnect').disabled = false;
+            document.getElementById('btnDisconnect').disabled = true;
+            log('Call Ended', 'info');
+        }
+
+        // --- VISUALIZERS ---
+        function visualizeMic(analyser) {
+            const dataArray = new Uint8Array(analyser.frequencyBinCount);
+            function draw() {
+                if(!mediaStream || !mediaStream.active) return;
+                requestAnimationFrame(draw);
+                analyser.getByteFrequencyData(dataArray);
+                const vol = dataArray.reduce((a,b)=>a+b) / dataArray.length;
+                micFill.style.width = (vol * 2) + '%';
             }
-            if (stream) {
-                stream.getTracks().forEach(track => track.stop());
-            }
-            if (ws) {
-                ws.close();
-            }
-            stopCallUI();
+            draw();
         }
 
-        function stopCallUI() {
-            startBtn.disabled = false;
-            stopBtn.disabled = true;
-            tenantSelect.disabled = false;
-            phoneInput.disabled = false;
-            ws = null;
-            stream = null;
-            mediaRecorder = null;
+        function visualizeSpeaker() {
+            // Fake visualizer for incoming packets
+            spkFill.style.width = '100%';
+            setTimeout(() => spkFill.style.width = '0%', 100);
         }
-
-        // --- Logging & UI Helpers ---
-        function log(msg, type = 'sent') {
-            const div = document.createElement('div');
-            div.className = `log-entry ${type}`;
-            const time = new Date().toLocaleTimeString();
-            div.innerHTML = `<span class="log-time">${time}</span> ${msg}`;
-
-            const container = document.getElementById('log-container');
-            container.appendChild(div);
-            container.scrollTop = container.scrollHeight;
-        }
-
-        function setStatus(text, className) {
-            statusDiv.textContent = `State: ${text}`;
-            statusDiv.className = `status ${className}`;
-        }
-
-        // --- Event Listeners ---
-        document.addEventListener('DOMContentLoaded', loadTenants);
-        refreshBtn.addEventListener('click', loadTenants);
-        tenantSelect.addEventListener('change', updatePreview);
-        phoneInput.addEventListener('input', updatePreview);
-        startBtn.addEventListener('click', startCall);
-        stopBtn.addEventListener('click', stopCall);
     </script>
 </body>
-
 </html>

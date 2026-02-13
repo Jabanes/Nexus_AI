@@ -8,7 +8,7 @@ class CheckAvailabilityTool(BaseTool):
 
     @property
     def description(self) -> str:
-        return "בודק אם יש תורים פנויים ביום ובשעה מסוימים"
+        return "Checks if there are available slots on a specific date and time"
 
     @property
     def parameters(self) -> Dict[str, Any]:
@@ -22,14 +22,14 @@ class CheckAvailabilityTool(BaseTool):
         }
 
     async def execute(self, **kwargs) -> Any:
-        # כאן תהיה קריאה ל-DB או ליומן גוגל
-        # כרגע נחזיר תשובה מדומה (Mock)
+        # DB or Google Calendar call would go here
+        # Returning mock response
         date = kwargs.get("date")
         time = kwargs.get("time")
         
         if time == "16:00":
-            return "השעה 16:00 תפוסה. 16:30 פנוי."
-        return f"יש מקום פנוי ב-{date} בשעה {time}."
+            return "The time 16:00 is taken. 16:30 is available."
+        return f"There is an available slot on {date} at {time}."
 
 class BookAppointmentTool(BaseTool):
     @property
@@ -38,7 +38,7 @@ class BookAppointmentTool(BaseTool):
 
     @property
     def description(self) -> str:
-        return "קובע תור חדש ביומן"
+        return "Books a new appointment in the calendar"
 
     @property
     def parameters(self) -> Dict[str, Any]:
@@ -52,4 +52,4 @@ class BookAppointmentTool(BaseTool):
         }
 
     async def execute(self, **kwargs) -> Any:
-        return "התור נקבע בהצלחה!"
+        return "Appointment booked successfully!"
