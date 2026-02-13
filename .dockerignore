@@ -1,0 +1,28 @@
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Virtual environment
+env/
+venv/
+.env
+
+# Local logs and data
+data/history/
+data/leads/
+logs/
+*.log
+
+# Git
+.git
+.gitignore
+
+# IDEs
+.vscode/
+.idea/
+
+# Development scripts
+scripts/
+tests/
+test_session_persistence.py

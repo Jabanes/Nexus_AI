@@ -1,8 +1,10 @@
+from dotenv import load_dotenv
+load_dotenv()  # MUST BE AT THE ABSOLUTE TOP
+
 import logging
 from fastapi import FastAPI, HTTPException, Request, WebSocket, WebSocketDisconnect
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
-from dotenv import load_dotenv
 from typing import Optional
 
 # --- Architecture Imports ---
@@ -14,14 +16,23 @@ from src.core.audio.streamer import AudioBridge
 from src.core.history import SessionRecorder, FileSessionRepository
 from src.core.intelligence import PostCallIntelligenceEngine
 
-# 1. Bootstrapping (Env + Logs)
-load_dotenv()
+# 1. Bootstrapping (Logs)
 setup_logging()
 
 # Get the configured logger for this module
 logger = logging.getLogger("nexus.api")
 
 app = FastAPI(title="Nexus Voice Engine", version="1.0.0")
+
+# --- CORS Middleware (Enable for Test UI) ---
+from fastapi.middleware.cors import CORSMiddleware
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],  # Allows all origins
+    allow_credentials=True,
+    allow_methods=["*"],  # Allows all methods
+    allow_headers=["*"],  # Allows all headers
+)
 
 # Initialize the conversation manager (singleton)
 conversation_manager = ConversationManager()
@@ -63,6 +74,22 @@ class SendMessageRequest(BaseModel):
 async def health_check():
     logger.debug("Health check probe received")
     return {"status": "active", "engine": "Nexus v1.0"}
+
+@app.get("/tenants")
+async def get_tenants():
+    """Returns a list of available tenants based on directory structure."""
+    import os
+    tenants_dir = "src/tenants"
+    try:
+        tenants = [
+            d for d in os.listdir(tenants_dir)
+            if os.path.isdir(os.path.join(tenants_dir, d))
+            and not d.startswith("_")
+        ]
+        return {"tenants": tenants}
+    except Exception as e:
+        logger.error(f"Error listing tenants: {e}")
+        return {"tenants": []}
 
 @app.post("/init-session")
 async def init_session(request: InitCallRequest):
@@ -420,17 +447,29 @@ async def call_endpoint(websocket: WebSocket, tenant_id: str, customer_phone: Op
             await websocket.close(code=1011, reason="Session initialization error")
             return
         
-        # Initialize AudioBridge (connects to PersonaPlex sidecar)
+        # 3. Load Tenant Config for Voice Settings
         try:
+            tenant_config = TenantLoader.load_tenant(tenant_id)
+            voice_settings = tenant_config.get("voice_settings", {})
+        except Exception as e:
+            logger.error(f"Failed to load tenant config: {e}")
+            voice_settings = {}
+
+        try:
+            # 4. Start Audio Bridge
             audio_bridge = AudioBridge(
                 client_ws=websocket,
                 tenant_id=tenant_id,
                 session_id=session_id,
                 conversation_session_id=conversation_session.session_id,
+                system_prompt=conversation_session.system_prompt,
+                voice_settings=voice_settings,
                 session_recorder=session_recorder
             )
+            # Store for cleanup
+            conversation_session.audio_bridge = audio_bridge
             
-            logger.info(f"🎙️ AudioBridge created, connecting to PersonaPlex...")
+            logger.info("🎙️ AudioBridge created, connecting to PersonaPlex...")
             
             # Send ready status
             await websocket.send_json({
@@ -489,62 +528,56 @@ async def call_endpoint(websocket: WebSocket, tenant_id: str, customer_phone: Op
             pass
     
     finally:
-        # Cleanup
+        # 1. STOP the bridge
         if audio_bridge:
-            try:
-                await audio_bridge.stop()
-            except Exception as e:
-                logger.error(f"Error stopping audio bridge: {e}")
+            try: await audio_bridge.stop()
+            except: pass
         
-        # Finalize and save session recording
-        # Use the ConversationManager's recorder (has actual conversation data)
-        # Fall back to the main.py-level recorder if CM session unavailable
+        # 2. CAPTURE the recorder and CLOSE the session
+        # We close the session FIRST to let the manager do its basic cleanup
         effective_recorder = session_recorder
         if conversation_session:
             conv_sess = conversation_manager.get_session(conversation_session.session_id)
             if conv_sess and conv_sess.session_recorder:
                 effective_recorder = conv_sess.session_recorder
-                logger.debug("Using ConversationManager's session recorder for persistence")
-        
-        if effective_recorder and session_repository:
+            
+            # Close session (triggers manager's internal finalize)
+            conversation_manager.close_session(conversation_session.session_id)
+
+        # 3. ENRICH WITH INTELLIGENCE (The absolute last word)
+        if effective_recorder:
             try:
-                # Finalize the session (marks end time, calculates duration)
-                effective_recorder.finalize(status="COMPLETED")
+                # Ensure the recorder is in a finalized state so it has a transcript
+                if effective_recorder.status == "IN_PROGRESS":
+                    effective_recorder.finalize(status="COMPLETED")
+
+                # Run AI Analysis on the finalized data
+                intelligence_engine = PostCallIntelligenceEngine()
+                analysis = await intelligence_engine.analyze_session(
+                    session_data=effective_recorder.session_data,
+                    customer_phone=customer_phone
+                )
                 
-                # Export session data
-                session_data = effective_recorder.export()
+                # Merge analysis back into memory
+                effective_recorder.session_data["summary"] = {
+                    "intent": analysis.get("core_intent", "Inquiry"),
+                    "outcome": analysis.get("call_outcome", "Resolved"),
+                    "sentiment": analysis.get("sentiment", "Neutral"),
+                    "summary": analysis.get("summary", ""),
+                    "follow_up_required": analysis.get("follow_up_required", False)
+                }
                 
-                # Save to repository (file system)
-                file_path = await session_repository.save_session(tenant_id, session_data)
-                logger.info(f"💾 Session saved: {file_path}")
-                
-                # Post-call intelligence (non-blocking)
-                try:
-                    intelligence_engine = PostCallIntelligenceEngine()
-                    lead = await intelligence_engine.analyze_session(
-                        session_data,
-                        customer_phone=customer_phone
-                    )
-                    session_data["intelligence"] = lead.model_dump()
-                    # Re-save with intelligence data
-                    await session_repository.save_session(tenant_id, session_data)
-                    logger.info(
-                        f"🧠 Intelligence: intent={lead.core_intent}, "
-                        f"sentiment={lead.sentiment}, outcome={lead.call_outcome}"
-                    )
-                except Exception as e:
-                    logger.warning(f"⚠️ Intelligence analysis failed (non-blocking): {e}")
-                
+                # UPDATE METADATA
+                if analysis.get("customer_name"):
+                    effective_recorder.session_data["meta"]["customer_name"] = analysis["customer_name"]
+
+                # 4. FINAL OVERWRITE: This save wins the race
+                file_path = await effective_recorder.save_session()
+                logger.info(f"💾 FINAL enriched session saved: {file_path}")
+
             except Exception as e:
-                logger.error(f"❌ Failed to save session recording: {e}")
-        
-        # Close conversation session (uses conversation session ID, not WebSocket ID)
-        if conversation_session:
-            try:
-                conversation_manager.close_session(conversation_session.session_id)
-            except:
-                pass
-        
+                logger.error(f"❌ Final enrichment failed: {e}")
+
         logger.info(f"🔚 Call endpoint cleanup complete: session={session_id}")
         reset_context()
 

@@ -14,7 +14,7 @@ import asyncio
 import logging
 import os
 import subprocess
-from typing import Optional, Callable, TYPE_CHECKING
+from typing import Optional, Callable, TYPE_CHECKING, Dict, Any
 from enum import Enum
 import websockets
 from fastapi import WebSocket
@@ -68,6 +68,8 @@ class AudioBridge:
         tenant_id: str,
         session_id: str,
         conversation_session_id: str,
+        system_prompt: str,
+        voice_settings: Dict[str, Any],
         session_recorder: Optional['SessionRecorder'] = None
     ):
         """
@@ -78,12 +80,16 @@ class AudioBridge:
             tenant_id: Tenant identifier for logging/routing
             session_id: Unique session identifier (WebSocket/call level)
             conversation_session_id: The ConversationManager session ID (for LLM calls)
+            system_prompt: The system prompt for the persona
+            voice_settings: Dict containing voice_id, language, etc.
             session_recorder: Optional SessionRecorder for capturing conversation history
         """
         self.client_ws = client_ws
         self.tenant_id = tenant_id
         self.session_id = session_id
         self.conversation_session_id = conversation_session_id
+        self.system_prompt = system_prompt
+        self.voice_settings = voice_settings
         self.recorder = session_recorder
         
         # Helper to avoid circular imports if possible, or dependency injection
@@ -93,6 +99,7 @@ class AudioBridge:
         # PersonaPlex connection
         self.model_ws: Optional[websockets.WebSocketClientProtocol] = None
         self.model_url = os.getenv("PERSONAPLEX_WS_URL", "ws://localhost:9000/v1/audio-stream")
+        logger.info(f"AudioBridge initialized with Model URL: {self.model_url}")
         
         # Audio configuration
         self.sample_rate = int(os.getenv("AUDIO_SAMPLE_RATE", "16000"))
@@ -120,13 +127,6 @@ class AudioBridge:
     async def connect_model(self):
         """
         Connect to the NVIDIA PersonaPlex WebSocket (sidecar container).
-        
-        This method establishes the WebSocket connection to the external
-        PersonaPlex microservice. It includes retry logic and timeout handling.
-        
-        Raises:
-            ConnectionError: If unable to connect to PersonaPlex
-            TimeoutError: If connection attempt times out
         """
         timeout = int(os.getenv("PERSONAPLEX_CONNECT_TIMEOUT", "10"))
         max_attempts = int(os.getenv("PERSONAPLEX_MAX_RECONNECT_ATTEMPTS", "3"))
@@ -143,22 +143,30 @@ class AudioBridge:
                     self.model_state = ConnectionState.CONNECTING
                     
                     # Attempt WebSocket connection with timeout
-                    try:
-                        self.model_ws = await asyncio.wait_for(
-                            websockets.connect(
-                                self.model_url,
-                                ping_interval=30,
-                                ping_timeout=10,
-                                close_timeout=5
-                            ),
-                            timeout=timeout
-                        )
-                    except asyncio.TimeoutError:
-                        logger.error(f"PersonaPlex connection timeout (attempt {attempt})")
-                        self.model_state = ConnectionState.ERROR
-                        if attempt < max_attempts:
-                            await asyncio.sleep(retry_delay)
-                        continue
+                    # NOTE: We use ping_interval=None because PersonaPlex handles pings differently
+                    self.model_ws = await asyncio.wait_for(
+                        websockets.connect(
+                            self.model_url,
+                            ping_interval=None,
+                            close_timeout=5
+                        ),
+                        timeout=timeout
+                    )
+                    
+                    # --- HANDSHAKE ---
+                    # PersonaPlex expects initial configuration
+                    import json
+                    handshake = {
+                        "type": "session_config",
+                        "system_prompt": self.system_prompt,
+                        "voice_id": self.voice_settings.get("voice_id", "default"),
+                        "language_code": self.voice_settings.get("language", "en-US")
+                    }
+                    await self.model_ws.send(json.dumps(handshake))
+                    logger.info(f"Handshake sent to PersonaPlex: {handshake['voice_id']}")
+                    
+                    # Wait for server ready signal/ack if needed?
+                    # For now, we assume if send succeeds, we are good.
                     
                     self.model_state = ConnectionState.CONNECTED
                     logger.info(f"Successfully connected to PersonaPlex: {self.model_url}")

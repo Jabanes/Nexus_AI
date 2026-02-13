@@ -47,6 +47,8 @@ class SessionRecorder:
         self.end_time: Optional[datetime] = None
         self.status = "IN_PROGRESS"
         self.transcript: List[Dict[str, Any]] = []
+        self.session_data: Dict[str, Any] = {}
+        self.filepath: Optional[str] = None
         
         # Record connection establishment
         self._log_event("system", "connection_established", {})
@@ -194,25 +196,51 @@ class SessionRecorder:
             "duration_seconds": (self.end_time - self.start_time).total_seconds()
         })
         
+        # Populate session_data
+        self.session_data = self.export()
+        
         logger.info(f"[{self.tenant_id}:{self.session_id}] Session finalized: {status}")
+
+    async def save_session(self) -> str:
+        """
+        Persist the current session_data to disk.
+        
+        Returns:
+            str: The full path to the saved file.
+        """
+        from src.core.history import FileSessionRepository
+        repository = FileSessionRepository()
+        self.filepath = await repository.save_session(self.tenant_id, self.session_data)
+        return self.filepath
     
     def export(self) -> Dict[str, Any]:
         """
-        Export the complete session data in the standard schema.
-        
-        Returns:
-            Dict containing all session data ready for persistence
+        Export complete session data, preserving AI intelligence if it exists.
         """
-        # Calculate duration
         end = self.end_time or datetime.now(timezone.utc)
         duration_seconds = (end - self.start_time).total_seconds()
         
-        # Count events by type for summary statistics
         user_messages = len([t for t in self.transcript if t["role"] == "user" and t["type"] == "text"])
         ai_messages = len([t for t in self.transcript if t["role"] == "ai" and t["type"] == "text"])
         tool_calls = len([t for t in self.transcript if t["role"] == "tool"])
         errors = len([t for t in self.transcript if t.get("type") == "error"])
         
+        # --- FIX: Intelligence Preservation Logic ---
+        # Check if session_data already contains a real intent (not the placeholder)
+        existing_summary = self.session_data.get("summary", {})
+        intent = existing_summary.get("intent", "")
+        
+        if intent and "Unknown" not in intent:
+            # We already have AI data! Use the existing summary.
+            summary = existing_summary
+        else:
+            # No AI data yet, use the default placeholder
+            summary = {
+                "intent": "Unknown (To be implemented by LLM)",
+                "outcome": "Success" if self.status == "COMPLETED" else "Incomplete"
+            }
+        # ---------------------------------------------
+
         return {
             "session_id": self.session_id,
             "meta": {
@@ -229,10 +257,7 @@ class SessionRecorder:
                 "errors": errors,
                 "total_events": len(self.transcript)
             },
-            "summary": {
-                "intent": "Unknown (To be implemented by LLM)",  # Future: Extract intent via LLM
-                "outcome": "Success" if self.status == "COMPLETED" else "Incomplete"
-            },
+            "summary": summary,  # Now preserves your "Book haircut" intent
             "transcript": self.transcript
         }
 
