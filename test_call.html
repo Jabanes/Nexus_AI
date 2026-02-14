@@ -1,73 +1,189 @@
 <!DOCTYPE html>
 <html lang="en">
+
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Nexus Diagnostic Client</title>
     <style>
-        body { font-family: monospace; background: #111; color: #eee; padding: 2rem; }
-        .card { background: #222; padding: 1.5rem; border-radius: 8px; margin-bottom: 1rem; border: 1px solid #333; }
-        h1, h2 { margin-top: 0; }
-        button { padding: 10px 20px; cursor: pointer; font-weight: bold; margin-right: 10px; }
-        .green { background: #0f0; color: #000; border: none; }
-        .red { background: #f00; color: #fff; border: none; }
-        input, select { padding: 8px; background: #333; color: #fff; border: 1px solid #555; width: 100%; box-sizing: border-box; margin-bottom: 10px; }
-        
-        /* Meters */
-        .meter-container { display: flex; align-items: center; margin: 10px 0; }
-        .meter-label { width: 100px; }
-        .meter-bar-bg { flex-grow: 1; height: 10px; background: #333; border-radius: 5px; overflow: hidden; }
-        .meter-bar-fill { height: 100%; width: 0%; transition: width 0.1s; }
-        #mic-fill { background: #0cf; }
-        #spk-fill { background: #f0c; }
+        body {
+            font-family: monospace;
+            background: #111;
+            color: #eee;
+            padding: 2rem;
+        }
 
-        #logs { height: 300px; overflow-y: auto; background: #000; border: 1px solid #444; padding: 10px; font-size: 12px; }
-        .log-rx { color: #0f0; }
-        .log-tx { color: #0cf; }
-        .log-err { color: #f00; }
-        .log-info { color: #ff0; }
+        .card {
+            background: #222;
+            padding: 1.5rem;
+            border-radius: 8px;
+            margin-bottom: 1rem;
+            border: 1px solid #333;
+        }
+
+        h1,
+        h2 {
+            margin-top: 0;
+        }
+
+        button {
+            padding: 10px 20px;
+            cursor: pointer;
+            font-weight: bold;
+            margin-right: 10px;
+        }
+
+        .green {
+            background: #0f0;
+            color: #000;
+            border: none;
+        }
+
+        .red {
+            background: #f00;
+            color: #fff;
+            border: none;
+        }
+
+        input,
+        select {
+            padding: 8px;
+            background: #333;
+            color: #fff;
+            border: 1px solid #555;
+            width: 100%;
+            box-sizing: border-box;
+            margin-bottom: 10px;
+        }
+
+        /* Meters */
+        .meter-container {
+            display: flex;
+            align-items: center;
+            margin: 10px 0;
+        }
+
+        .meter-label {
+            width: 100px;
+        }
+
+        .meter-bar-bg {
+            flex-grow: 1;
+            height: 10px;
+            background: #333;
+            border-radius: 5px;
+            overflow: hidden;
+        }
+
+        .meter-bar-fill {
+            height: 100%;
+            width: 0%;
+            transition: width 0.1s;
+        }
+
+        #mic-fill {
+            background: #0cf;
+        }
+
+        #spk-fill {
+            background: #f0c;
+        }
+
+        #logs {
+            height: 300px;
+            overflow-y: auto;
+            background: #000;
+            border: 1px solid #444;
+            padding: 10px;
+            font-size: 12px;
+        }
+
+        .log-rx {
+            color: #0f0;
+        }
+
+        .log-tx {
+            color: #0cf;
+        }
+
+        .log-err {
+            color: #f00;
+        }
+
+        .log-info {
+            color: #ff0;
+        }
+
+        #stats {
+            color: #aaa;
+            font-size: 13px;
+            margin-top: 8px;
+        }
     </style>
 </head>
+
 <body>
     <div class="card">
         <h1>🎙️ Nexus Diagnostic Client</h1>
         <label>Tenant ID</label>
-        <select id="tenantSelect"><option value="barber_shop_demo">barber_shop_demo</option></select>
-        
+        <select id="tenantSelect">
+            <option value="barber_shop_demo">barber_shop_demo</option>
+        </select>
+
         <label>Status: <span id="status">Disconnected</span></label>
-        
+
         <div class="meter-container">
             <span class="meter-label">🎤 Mic</span>
-            <div class="meter-bar-bg"><div id="mic-fill" class="meter-bar-fill"></div></div>
+            <div class="meter-bar-bg">
+                <div id="mic-fill" class="meter-bar-fill"></div>
+            </div>
         </div>
         <div class="meter-container">
             <span class="meter-label">🔊 Speaker</span>
-            <div class="meter-bar-bg"><div id="spk-fill" class="meter-bar-fill"></div></div>
+            <div class="meter-bar-bg">
+                <div id="spk-fill" class="meter-bar-fill"></div>
+            </div>
         </div>
 
         <div style="margin-top: 20px;">
             <button id="btnConnect" class="green" onclick="startCall()">Start Call</button>
             <button id="btnDisconnect" class="red" onclick="stopCall()" disabled>Stop</button>
         </div>
+
+        <div id="stats">Waiting...</div>
     </div>
 
     <div id="logs"></div>
 
     <script>
         // --- CONFIG ---
-        const SAMPLE_RATE = 24000; // Must match Server Output
-        
+        const SAMPLE_RATE = 24000; // Must match Server Output (NVIDIA Moshi uses 24kHz)
+
         // --- STATE ---
         let ws = null;
         let audioCtx = null;
-        let nextTime = 0;
+        let workletNode = null;
+        let decoderWorker = null;
         let mediaStream = null;
         let recorder = null;
+
+        // --- DIAGNOSTIC COUNTERS ---
+        let stats = {
+            binaryMsgsRx: 0,
+            binaryBytesRx: 0,
+            textMsgsRx: 0,
+            audioChunksTx: 0,
+            pcmChunksPlayed: 0,
+            pcmBytesPlayed: 0,
+            playErrors: 0,
+        };
 
         // --- UI ---
         const logDiv = document.getElementById('logs');
         const micFill = document.getElementById('mic-fill');
         const spkFill = document.getElementById('spk-fill');
+        const statsDiv = document.getElementById('stats');
+        let statsTimer = null;
 
         function log(msg, type = 'info') {
             const el = document.createElement('div');
@@ -75,23 +191,132 @@
             el.innerText = `[${new Date().toLocaleTimeString()}] ${msg}`;
             logDiv.appendChild(el);
             logDiv.scrollTop = logDiv.scrollHeight;
+            while (logDiv.children.length > 200) logDiv.removeChild(logDiv.firstChild);
+        }
+
+        function updateStats() {
+            statsDiv.innerText =
+                `📊 bin_rx=${stats.binaryMsgsRx} (${stats.binaryBytesRx}B) | ` +
+                `text_rx=${stats.textMsgsRx} | ` +
+                `mic_tx=${stats.audioChunksTx} | ` +
+                `pcm_played=${stats.pcmChunksPlayed} | ` +
+                `play_errs=${stats.playErrors}`;
         }
 
         async function startCall() {
             // 1. Setup Audio Context (Must be user triggered)
-            audioCtx = new (window.AudioContext || window.webkitAudioContext)({ sampleRate: SAMPLE_RATE });
-            log(`AudioContext created. State: ${audioCtx.state}`, 'info');
-            
+            try {
+                audioCtx = new (window.AudioContext || window.webkitAudioContext)({ sampleRate: SAMPLE_RATE });
+                console.log("[AudioContext]", {
+                    state: audioCtx.state,
+                    sampleRate: audioCtx.sampleRate
+                });
+                log(`AudioContext created. sampleRate=${audioCtx.sampleRate} state=${audioCtx.state}`, 'info');
+
+                if (audioCtx.sampleRate !== SAMPLE_RATE) {
+                    log(`⚠️ Browser forced sampleRate=${audioCtx.sampleRate}, expected ${SAMPLE_RATE}`, 'err');
+                }
+
+                // Load AudioWorklet
+                await audioCtx.audioWorklet.addModule("static/audio/moshi-processor.js");
+                workletNode = new AudioWorkletNode(audioCtx, "moshi-processor");
+                workletNode.connect(audioCtx.destination);
+                log("✅ AudioWorklet 'moshi-processor' loaded and connected", 'info');
+
+            } catch (e) {
+                log(`AudioContext/Worklet Error: ${e.message}`, 'err');
+                return;
+            }
+
             // Resume if suspended (Browser Policy)
             if (audioCtx.state === 'suspended') {
                 await audioCtx.resume();
                 log(`AudioContext resumed. New State: ${audioCtx.state}`, 'info');
             }
 
-            // 2. Setup WebSocket
+            // 2. Setup WASM Decoder Worker
+            try {
+                decoderWorker = new Worker("static/audio/decoderWorker.js");
+
+                decoderWorker.onmessage = (e) => {
+                    // Check if message is the PCM output or initialization confirmation
+                    // NVIDIA decoderWorker sends data as [Float32Array] usually
+                    if (e.data && e.data.payload) {
+                        // Some versions wrap it
+                        // Adjust based on observation if needed, but assuming NVIDIA standard
+                    }
+
+                    // Sending PCM to AudioWorklet
+                    // We assume e.data is the PCM chunks channel data (array of Float32Array)
+                    // Or if it matches user spec: { type: "pcm", pcm: ... }
+                    // Since we are using the COPIED NVIDIA worker, we need to handle ITS output format.
+                    // IMPORTANT: The copied NVIDIA worker sends: postMessage(buffer, [buffer.buffer])
+                    // where buffer is Float32Array. 
+                    // Let's assume e.data is the Float32Array directly or [Float32Array].
+
+                    let pcmData = null;
+                    if (e.data instanceof Float32Array) {
+                        pcmData = e.data;
+                    } else if (Array.isArray(e.data) && e.data[0] instanceof Float32Array) {
+                        pcmData = e.data[0];
+                    } else if (e.data && e.data.pcm) {
+                        pcmData = e.data.pcm;
+                    } else {
+                        // Might be init message or other
+                        // console.log("Worker msg:", e.data);
+                        // If it's a Float32Array in any form, we take it
+                    }
+
+                    if (pcmData) {
+                        console.log("[DECODER OUTPUT]", {
+                            samples: pcmData.length,
+                            sampleRate: SAMPLE_RATE
+                        });
+                        log(`[DECODER OUTPUT] samples=${pcmData.length}`);
+
+                        console.log("[WORKLET SEND]", {
+                            samples: pcmData.length
+                        });
+                        log(`[WORKLET SEND] samples=${pcmData.length}`);
+
+                        stats.pcmChunksPlayed++;
+                        workletNode.port.postMessage({
+                            type: "push",
+                            pcm: pcmData
+                        });
+                        visualizeSpeaker();
+                    }
+                };
+
+                // Initialize the decoder
+                // Match NVIDIA initialization command
+                decoderWorker.postMessage({
+                    command: "init",
+                    bufferLength: 960, // 960 samples @ 24kHz = 40ms? No, 24000/25 = 960.
+                    decoderSampleRate: 24000,
+                    outputBufferSampleRate: 24000,
+                    resampleQuality: 0
+                });
+                log("✅ WASM Decoder Worker initialized (24kHz)", 'info');
+
+            } catch (e) {
+                log(`Worker Error: ${e.message}`, 'err');
+                return;
+            }
+
+            // Reset counters
+            stats = { binaryMsgsRx: 0, binaryBytesRx: 0, textMsgsRx: 0, audioChunksTx: 0, pcmChunksPlayed: 0, pcmBytesPlayed: 0, playErrors: 0 };
+
+            // Stats timer
+            statsTimer = setInterval(updateStats, 1000);
+
+            // 3. Setup WebSocket
             const tenant = document.getElementById('tenantSelect').value;
-            const wsUrl = `ws://localhost:8000/ws/call/${tenant}?customer_phone=test`;
-            
+            // Use window.location.hostname to valid if running locally or remote
+            const wsHost = window.location.hostname;
+            const wsUrl = `ws://${wsHost}:8000/ws/call/${tenant}?customer_phone=test`;
+            log(`Connecting to: ${wsUrl}`, 'info');
+
             ws = new WebSocket(wsUrl);
             ws.binaryType = 'arraybuffer';
 
@@ -99,29 +324,82 @@
                 document.getElementById('status').innerText = 'Connected';
                 document.getElementById('btnConnect').disabled = true;
                 document.getElementById('btnDisconnect').disabled = false;
-                log('WS Connected', 'info');
+                log('✅ WS Connected', 'info');
                 startMic();
             };
 
-            ws.onmessage = async (event) => {
+            ws.onmessage = (event) => {
+                console.log("[WS RX RAW]", {
+                    type: typeof event.data,
+                    ctor: event.data?.constructor?.name,
+                    size: event.data?.byteLength ?? event.data?.size ?? null
+                });
+                log(`[WS RX RAW] ctor=${event.data?.constructor?.name} size=${event.data?.byteLength ?? event.data?.size ?? 'n/a'}`);
+
                 if (event.data instanceof ArrayBuffer) {
-                    // AUDIO RECEIVED
-                    playPcm(event.data);
-                    visualizeSpeaker();
+                    const buffer = event.data;
+                    const u8 = new Uint8Array(buffer);
+
+                    stats.binaryMsgsRx++;
+                    stats.binaryBytesRx += buffer.byteLength;
+
+                    if (u8.length < 2) {
+                        console.warn("[WS RX] Frame too short, ignoring", u8.length);
+                        return;
+                    }
+
+                    const tag = u8[0];
+                    const payload = u8.slice(1);
+                    const headerHex = Array.from(payload.slice(0, 4))
+                        .map(b => b.toString(16).padStart(2, '0')).join('');
+
+                    // Log first 10 frames
+                    if (stats.binaryMsgsRx <= 10) {
+                        console.log(`[WS RX] tag=0x${tag.toString(16).padStart(2, '0')} payload=${payload.byteLength} header=${headerHex}`);
+                        log(`[WS RX] tag=0x${tag.toString(16).padStart(2, '0')} payload=${payload.byteLength} header=${headerHex}`);
+                    }
+
+                    if (tag !== 1) {
+                        console.warn(`[WS RX] Unexpected tag=0x${tag.toString(16).padStart(2, '0')}, ignoring`);
+                        return;
+                    }
+
+                    // Verify OggS header (0x4f 0x67 0x67 0x53)
+                    const isOgg = payload.length >= 4 &&
+                        payload[0] === 0x4f &&
+                        payload[1] === 0x67 &&
+                        payload[2] === 0x67 &&
+                        payload[3] === 0x53;
+
+                    if (!isOgg) {
+                        console.warn(`[WS RX] tag=0x01 but payload does NOT start with OggS (header=${headerHex}), ignoring`);
+                        log(`[WS RX] ⚠️ tag=0x01 but NOT OggS: header=${headerHex}`, 'err');
+                        return;
+                    }
+
+                    // Forward verified Ogg page to decoder worker
+                    decoderWorker.postMessage(
+                        { command: "decode", pages: payload },
+                        [payload.buffer]
+                    );
                 } else {
-                    // TEXT RECEIVED
+                    stats.textMsgsRx++;
                     log(`MSG: ${event.data}`, 'rx');
                 }
             };
 
-            ws.onclose = () => stopCall();
+            ws.onclose = (e) => {
+                log(`WS Closed: code=${e.code} reason=${e.reason}`, 'info');
+                stopCall();
+            };
             ws.onerror = (e) => log('WS Error', 'err');
         }
 
         async function startMic() {
             try {
                 mediaStream = await navigator.mediaDevices.getUserMedia({ audio: true });
-                
+                log(`Mic access granted. Tracks: ${mediaStream.getAudioTracks().length}`, 'info');
+
                 // Visualization
                 const micCtx = new AudioContext();
                 const source = micCtx.createMediaStreamSource(mediaStream);
@@ -129,73 +407,63 @@
                 source.connect(analyser);
                 visualizeMic(analyser);
 
-                // Recording (Send as WebM/Opus)
+                // Recording
+                // Note: ideally use opus-recorder to send Ogg, but standard MediaRecorder sending WebM
+                // is handled by our backend transcoder.
                 recorder = new MediaRecorder(mediaStream, { mimeType: 'audio/webm;codecs=opus' });
-                
+
                 recorder.ondataavailable = (e) => {
                     if (e.data.size > 0 && ws && ws.readyState === 1) {
-                        ws.send(e.data); // Send to Server
+                        stats.audioChunksTx++;
+                        ws.send(e.data);
                     }
                 };
-                
+
                 recorder.start(100); // 100ms chunks
-                log('Microphone started', 'info');
+                log('🎤 Microphone started (100ms chunks)', 'info');
 
             } catch (e) {
                 log(`Mic Error: ${e.message}`, 'err');
             }
         }
 
-        function playPcm(arrayBuffer) {
-            // Convert s16le -> float32
-            const int16 = new Int16Array(arrayBuffer);
-            const float32 = new Float32Array(int16.length);
-            for(let i=0; i<int16.length; i++) float32[i] = int16[i] / 32768;
-
-            // Schedule
-            const buffer = audioCtx.createBuffer(1, float32.length, SAMPLE_RATE);
-            buffer.copyToChannel(float32, 0);
-            
-            const source = audioCtx.createBufferSource();
-            source.buffer = buffer;
-            source.connect(audioCtx.destination);
-            
-            const now = audioCtx.currentTime;
-            nextTime = Math.max(now, nextTime);
-            source.start(nextTime);
-            nextTime += buffer.duration;
-        }
-
         function stopCall() {
-            if(ws) ws.close();
-            if(recorder) recorder.stop();
-            if(mediaStream) mediaStream.getTracks().forEach(t => t.stop());
-            if(audioCtx) audioCtx.close();
-            
+            if (statsTimer) { clearInterval(statsTimer); statsTimer = null; }
+            updateStats(); // Final update
+
+            if (ws) { try { ws.close(); } catch (e) { } ws = null; }
+            if (recorder && recorder.state !== 'inactive') { try { recorder.stop(); } catch (e) { } }
+            if (mediaStream) { mediaStream.getTracks().forEach(t => t.stop()); mediaStream = null; }
+
+            if (decoderWorker) { decoderWorker.terminate(); decoderWorker = null; }
+            if (workletNode) { workletNode.disconnect(); workletNode = null; }
+
+            if (audioCtx) { try { audioCtx.close(); } catch (e) { } audioCtx = null; }
+
             document.getElementById('status').innerText = 'Disconnected';
             document.getElementById('btnConnect').disabled = false;
             document.getElementById('btnDisconnect').disabled = true;
-            log('Call Ended', 'info');
+            log('📴 Call Ended', 'info');
         }
 
         // --- VISUALIZERS ---
         function visualizeMic(analyser) {
             const dataArray = new Uint8Array(analyser.frequencyBinCount);
             function draw() {
-                if(!mediaStream || !mediaStream.active) return;
+                if (!mediaStream || !mediaStream.active) return;
                 requestAnimationFrame(draw);
                 analyser.getByteFrequencyData(dataArray);
-                const vol = dataArray.reduce((a,b)=>a+b) / dataArray.length;
+                const vol = dataArray.reduce((a, b) => a + b) / dataArray.length;
                 micFill.style.width = (vol * 2) + '%';
             }
             draw();
         }
 
         function visualizeSpeaker() {
-            // Fake visualizer for incoming packets
             spkFill.style.width = '100%';
             setTimeout(() => spkFill.style.width = '0%', 100);
         }
     </script>
 </body>
+
 </html>

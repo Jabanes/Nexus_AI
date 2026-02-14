@@ -152,3 +152,12 @@ def setup_logging():
     # Log a startup message to confirm colored logging is active
     logger = logging.getLogger("nexus.logging")
     logger.info(f"Logging initialized: Level={log_level}, Format={log_format}")
+
+    # Suppress noisy third-party logs
+    logging.getLogger("websockets").setLevel(logging.WARNING)
+    logging.getLogger("websockets.client").setLevel(logging.WARNING)
+    logging.getLogger("websockets.server").setLevel(logging.WARNING)
+    logging.getLogger("asyncio").setLevel(logging.WARNING)
+    logging.getLogger("uvicorn").setLevel(logging.WARNING)
+    logging.getLogger("uvicorn.error").setLevel(logging.WARNING)
+    logging.getLogger("uvicorn.access").setLevel(logging.WARNING)
