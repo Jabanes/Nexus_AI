@@ -201,7 +201,7 @@ class AudioBridge:
                     payload = msg[1:] if len(msg) > 1 else b''
 
                     # --- PART 3: Log tag and payload analysis ---
-                    logger.info(
+                    logger.debug(
                         f"[PersonaPlex FRAME] "
                         f"tag=0x{tag:02x} "
                         f"payload_size={len(payload)} "
@@ -211,7 +211,7 @@ class AudioBridge:
                     if tag == 0:
                         self.tag_counts[0] += 1
                         # --- PART 5: Log keepalive ---
-                        logger.info(
+                        logger.debug(
                             f"[PersonaPlex KEEPALIVE] size={len(msg)} hex={msg.hex()}"
                         )
 
@@ -227,13 +227,13 @@ class AudioBridge:
                         self.total_pcm_bytes_tx += len(payload)  # Track bytes forwarded
 
                         # --- PART 4: Log audio detection ---
-                        logger.info(
+                        logger.debug(
                             f"[PersonaPlex AUDIO DETECTED] "
                             f"ogg_header={payload[:4].hex()} "
                             f"size={len(payload)}"
                         )
 
-                        logger.info(
+                        logger.debug(
                             f"[AUDIO RX] ogg_page size={len(payload)} total_rx={self.total_audio_bytes_rx} count={self.tag_counts[1]}"
                         )
 
@@ -252,7 +252,7 @@ class AudioBridge:
                                 f"[BROWSER_TX] tag=0x01 size={len(payload)} header={payload[:4].hex()}"
                             )
 
-                        logger.info(
+                        logger.debug(
                             f"[AUDIO TX → BROWSER] ogg_page size={len(payload)} total_tx={self.total_pcm_bytes_tx}"
                         )
 
@@ -377,6 +377,19 @@ class AudioBridge:
         if self.input_transcoder:
             try:
                 self.input_transcoder.kill()
+                await asyncio.wait_for(self.input_transcoder.wait(), timeout=5.0)
+            except asyncio.TimeoutError:
+                logger.warning("FFmpeg process did not exit within 5s after kill")
+            except Exception:
+                pass
+            # Log any FFmpeg errors
+            try:
+                if self.input_transcoder.stderr:
+                    stderr_output = await asyncio.wait_for(
+                        self.input_transcoder.stderr.read(), timeout=2.0
+                    )
+                    if stderr_output:
+                        logger.warning(f"FFmpeg stderr: {stderr_output.decode(errors='replace')}")
             except Exception:
                 pass
         if self.model_ws:

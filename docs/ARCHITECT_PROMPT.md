@@ -142,6 +142,15 @@ If not → simplify.
 
 ---
 
+# PROVIDER ABSTRACTION RULES
+
+- Voice providers must implement `IVoiceProvider` ABC in `src/core/voice/base_provider.py`. Never import a specific voice provider directly from orchestration code — use `create_voice_provider()`.
+- LLM providers must implement `ILLMProvider` ABC in `src/core/llm/base_provider.py`. Never import a specific LLM provider directly — use `create_llm_provider()`.
+- Tenant tools should prefer shared integrations (`src/integrations/`) over local `tools.py`. Use handler-ref config style for reusable tools.
+- New providers are registered in their respective factory files, not in consuming code.
+
+---
+
 # OUTPUT MODES
 
 ## Light Blueprint

@@ -1,9 +1,12 @@
 tenant_id: "barber_shop_01"
 
 voice_settings:
-  provider: "nvidia_personaplex"
+  provider: "elevenlabs"
   voice_id: "NATM0.pt"
-  language: "en-US"
+  language: "he-IL"
+  provider_specific: {}
+  # To use ElevenLabs, set ELEVENLABS_API_KEY and ELEVENLABS_AGENT_ID in .env
+  # To use PersonaPlex instead, change provider to "nvidia_personaplex"
 
 # ─── Identity & Behavior ─────────────────────────────────
 # WHO the agent is and HOW it behaves.
@@ -37,6 +40,13 @@ knowledge_base:
     - "Late arrival over 15 minutes - appointment cancelled"
 
 # ─── Tools ────────────────────────────────────────────────
+# Handler-ref style: shared integration tools with per-tenant config
 enabled_tools:
-  - "check_availability"
-  - "book_appointment"
+  - name: "check_availability"
+    handler: "src.integrations.mock.tools.MockCheckAvailabilityTool"
+    config:
+      calendar_id: "yossi@gmail.com"
+  - name: "book_appointment"
+    handler: "src.integrations.mock.tools.MockBookAppointmentTool"
+    config:
+      calendar_id: "yossi@gmail.com"

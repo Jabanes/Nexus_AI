@@ -113,12 +113,16 @@ Breaks deterministic flows
   - Advisor behavior → AdvisorConfig
   - Prompts → stored in config, not code
   - Mappings → stored in config, not code
+  - Tool implementations → shared in `src/integrations/`, referenced from config
 - Never duplicate logic, mappings, or constants across files
 
 ## CONFIG-DRIVEN ONLY
 - All advisor-specific behavior MUST live in configuration
 - Code must be generic and advisor-agnostic
 - No hardcoded advisor names, prompts, sections, mappings, languages, or rules
+- Tool handler references use dotted Python paths in config.yaml (e.g., `handler_ref: src.integrations.calendar.handle`)
+- Voice provider selection is driven by config.yaml per tenant
+- LLM provider selection is driven by environment variables
 
 ## DEPENDENCIES & ENV CONSTRAINTS
 - Use EXACT same environment variables as legacy

@@ -12,14 +12,23 @@ tenant_id: "my_business_01"
 
 # Voice settings for audio synthesis
 voice_settings:
-  # Provider: nvidia_personaplex, vapi, elevenlabs
-  provider: "nvidia_personaplex"
+  # Provider: "nvidia_personaplex" or "elevenlabs"
+  provider: "elevenlabs"
 
   # Voice ID from your audio provider
-  voice_id: "NATM0.pt"
+  voice_id: "your-voice-id"
 
   # Language code (BCP-47 format)
   language: "en-US"
+
+  # Provider-specific settings (only read by the chosen provider)
+  provider_specific:
+    # For elevenlabs:
+    #   agent_id: "your-agent-id"       # ElevenLabs Conversational AI Agent ID
+    #   api_key: "sk-..."               # Optional per-tenant override (falls back to env)
+    #
+    # For nvidia_personaplex:
+    #   ws_url: "ws://localhost:9000"    # PersonaPlex sidecar URL (falls back to env)
 
 # ─── Identity & Behavior ─────────────────────────────────
 # WHO the agent is and HOW it behaves.
@@ -60,11 +69,25 @@ knowledge_base:
     - "No refunds on completed services"
 
 # ─── Tools ────────────────────────────────────────────────
-# Tool names must match the class names in tools.py (snake_case)
-# Example: CheckAvailabilityTool → "check_availability"
+# Two styles supported:
+#
+# Style 1 — Handler reference (shared integrations, recommended):
+#   Points to a BaseTool subclass in src/integrations/ via dotted path.
+#   Per-tenant config is passed to the tool constructor.
+#
+# Style 2 — Legacy (local tools.py):
+#   Just the tool name as a string. The tool class must exist in
+#   this tenant's tools.py file.
+#
 enabled_tools:
+  # --- Style 1: Shared Integration ---
+  # - name: "check_availability"
+  #   handler: "src.integrations.google_calendar.tools.CheckAvailabilityTool"
+  #   config:
+  #     calendar_id: "your-calendar@gmail.com"
+
+  # --- Style 2: Local Custom Tool ---
   - "example_tool"
-  # - "another_tool"
 
 # Optional: Additional metadata
 metadata:

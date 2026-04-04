@@ -1,53 +1,127 @@
-# Nexus Voice Engine 🎙️🤖
+# Nexus Voice Engine
 
 **A Production-Ready, Multi-Tenant SaaS Platform for AI Voice Agents with Real-Time Audio Streaming.**
 
-This system orchestrates real-time voice conversations using a **Sidecar Microservice Pattern**, connecting NVIDIA PersonaPlex (external Docker container) for GPU-accelerated audio processing with Google Gemini for conversational intelligence, strictly following a config-driven architecture.
+Nexus orchestrates real-time voice conversations using a **provider-agnostic** architecture. Voice processing (ElevenLabs, NVIDIA PersonaPlex, etc.) and LLM intelligence (Google Gemini, with more planned) are abstracted behind clean interfaces, allowing tenants to mix and match providers via configuration alone.
 
-**Status:** ✅ Production Ready with Full-Duplex WebSocket Streaming
+**Status:** Production Ready with Full-Duplex WebSocket Streaming
 
 ---
 
-## 🏗️ Architecture Philosophy
+## Architecture Philosophy
 
-This project adheres to strict architectural guidelines designed for stability and scalability:
-
-1.  **Sidecar Pattern:** NVIDIA PersonaPlex runs as an external Docker container. Nexus acts as a WebSocket proxy/bridge, handling audio transcoding and connection management.
+1.  **Provider Abstraction:** Voice and LLM capabilities are behind abstract interfaces (`IVoiceProvider`, `ILLMProvider`). New providers are added without touching core orchestration.
 2.  **Core / Tenant Separation:** The `src/core` engine knows **nothing** about specific businesses. It is a generic machine that processes audio and executes tool calls.
-3.  **Config Driven:** Tenant behavior (Persona, Knowledge Base, Tool Definitions) is defined strictly in configuration files (`config.yaml`), not in the engine code.
-4.  **Tier 2 Complexity:** This is a "Business Logic Feature" set. We use a Modular Monolith approach with sidecar for audio processing.
-5.  **SSOT (Single Source of Truth):** All documentation lives in `docs/PROJECT_CONTEXT.md`. Tools and logic are defined once.
+3.  **Config Driven:** Tenant behavior (persona, voice provider, tool definitions) is defined strictly in configuration files (`config.yaml`), not in the engine code.
+4.  **Shared Integrations:** Reusable tool implementations live in `src/integrations/` and can be referenced by any tenant via handler path in their config.
+5.  **SSOT (Single Source of Truth):** All documentation lives in `docs/PROJECT_CONTEXT.md`.
 
 ---
 
-## 📂 Directory Breakdown
+## Directory Breakdown
 
-### `src/core/audio/` (Audio Bridge - NEW)
-* **Responsibility:** Manages dual WebSocket connections (client + PersonaPlex), audio transcoding via FFmpeg, and barge-in detection.
-* **Key File:** `streamer.py` (AudioBridge class) - The heart of real-time audio streaming.
+### `src/core/voice/` (Voice Provider Layer)
+* **Responsibility:** Abstracts voice/audio processing behind a pluggable provider interface.
+* **Key Files:**
+    * `base_provider.py` — `IVoiceProvider` abstract base class
+    * `bridge.py` — `VoiceBridge`, the unified entry point for audio streaming
+    * `provider_factory.py` — Factory that instantiates the correct provider from tenant config
+    * `personaplex_provider.py` — NVIDIA PersonaPlex provider (legacy, Docker sidecar)
+    * `elevenlabs_provider.py` — ElevenLabs Conversational AI provider (recommended)
+
+### `src/core/llm/` (LLM Provider Layer)
+* **Responsibility:** Abstracts LLM communication behind a pluggable provider interface.
+* **Key Files:**
+    * `base_provider.py` — `ILLMProvider` abstract base class
+    * `gemini_provider.py` — Google Gemini implementation
+    * `factory.py` — Factory that reads the `LLM_PROVIDER` env var to select a provider
+
+### `src/core/audio/` (Audio Transcoding)
+* **Responsibility:** FFmpeg-based audio transcoding (WebM to PCM and back), barge-in detection.
 
 ### `src/core/` (The Engine)
-* **Responsibility:** Handles WebSocket endpoints, conversation state, and LLM communication.
-* **Constraint:** NEVER hardcode business logic here. If you are writing "If tenant is Pizza Hut...", you are violating the architecture.
+* **Responsibility:** WebSocket endpoints, conversation orchestration, session/history management.
+* **Constraint:** NEVER hardcode business logic here.
 
-### `src/tenants/` (The Business Logic)
-* **Responsibility:** Contains the specific configuration and executable tools for each client.
-* **Structure:** Each folder represents a distinct tenant (business).
+### `src/tenants/` (Tenant Configurations)
+* **Responsibility:** Per-tenant configuration and optional local tool implementations.
 * **Components:**
-    * `config.yaml`: Defines the System Prompt, Voice ID, and active Tools.
-    * `tools.py`: Python functions that interact with the real world (DBs, CRMs, APIs).
+    * `config.yaml` — System prompt, voice provider/settings, enabled tools.
+    * `tools.py` — (Optional) Local tool implementations. Tenants can also reference shared tools from `src/integrations/`.
 
-### `src/interfaces/` (The Contracts)
-* **Responsibility:** Defines the `BaseTool` abstract class. All tenant tools must implement this interface to ensure the Engine can execute them safely.
+### `src/integrations/` (Shared Tool Implementations)
+* **Responsibility:** Reusable tool modules that any tenant can reference by handler path in `config.yaml`.
+* **Packages:** `mock/` (dev/testing tools), `google_calendar/`, and more as needed.
+
+### `src/interfaces/` (Contracts)
+* **Responsibility:** Defines `BaseTool` abstract class (now accepts optional `config` dict for per-tenant parameterization).
 
 ### `docs/` (Documentation)
-* **`PROJECT_CONTEXT.md`**: **SINGLE SOURCE OF TRUTH** for all documentation (1,200+ lines). Includes architecture, quick start, sidecar pattern, deployment, troubleshooting, and everything else.
+* **`PROJECT_CONTEXT.md`**: Single source of truth for architecture, data flows, deployment, and troubleshooting.
 
 ---
 
-## 🚀 How to Onboard a New Tenant
+## Quick Start
 
-We follow the **Incremental Evolution Rule**. Adding a client does not require restarting the engine or modifying core code.
+### Development Mode (One Command)
+
+```bash
+# Install dependencies (first time only)
+pip install -r requirements.txt
+
+# Start everything
+python scripts/start_dev.py
+```
+
+The script will:
+- Check FFmpeg installation
+- Check port availability (auto-switch if needed)
+- Create `.env` from example if missing
+- Start the Nexus Engine (port 8000)
+- Handle graceful shutdown (Ctrl+C)
+
+### Manual Setup
+
+```bash
+# 1. Setup environment
+python -m venv env
+source env/bin/activate        # macOS/Linux
+env\Scripts\activate           # Windows
+
+# 2. Install dependencies
+pip install -r requirements.txt
+
+# 3. Configure
+cp env.example.new .env
+# Edit .env — see Environment Variables below
+
+# 4. Start Nexus Engine
+uvicorn src.main:app --host 0.0.0.0 --port 8000 --reload
+```
+
+### Test Real-Time Audio
+
+Open `test_audio.html` in your browser and click "Start Call".
+
+---
+
+## Environment Variables
+
+| Variable | Required | Description |
+|---|---|---|
+| `GEMINI_API_KEY` | Yes | Google Gemini API key |
+| `LLM_PROVIDER` | No | LLM backend to use (default: `gemini`) |
+| `GEMINI_TRANSPORT` | No | `rest` (default, stable) or `grpc` (low-latency Linux/Docker) |
+| `ELEVENLABS_API_KEY` | For ElevenLabs | API key for ElevenLabs voice provider |
+| `ELEVENLABS_AGENT_ID` | For ElevenLabs | ElevenLabs Conversational AI agent ID |
+| `PERSONAPLEX_WS_URL` | For PersonaPlex | WebSocket URL of the PersonaPlex sidecar |
+| `CORS_ALLOWED_ORIGINS` | No | Comma-separated allowed origins (default: `*`) |
+
+---
+
+## How to Onboard a New Tenant
+
+Adding a tenant does not require restarting the engine or modifying core code.
 
 1.  **Create Tenant Directory:**
     Copy `src/tenants/_template` to `src/tenants/my_new_client`.
@@ -56,7 +130,7 @@ We follow the **Incremental Evolution Rule**. Adding a client does not require r
     ```yaml
     tenant_id: "barber_shop_01"
     voice_settings:
-      provider: "nvidia_personaplex"
+      provider: "elevenlabs"          # or "personaplex"
       voice_id: "en_us_male_calm"
     system_prompt: |
       You are a helpful receptionist at 'Joe's Barbershop'.
@@ -66,8 +140,12 @@ We follow the **Incremental Evolution Rule**. Adding a client does not require r
       - "book_appointment"
     ```
 
-3.  **Implement Tools (`tools.py`):**
-    Inherit from `BaseTool` and implement the logic.
+3.  **Implement Tools — pick one approach:**
+
+    **Option A: Shared integration (recommended)**
+    Reference a handler path from `src/integrations/` in your config. No local `tools.py` needed.
+
+    **Option B: Local `tools.py`**
     ```python
     from src.interfaces.base_tool import BaseTool
 
@@ -77,163 +155,59 @@ We follow the **Incremental Evolution Rule**. Adding a client does not require r
         parameters = {"time": "string"}
 
         async def execute(self, time: str):
-            # Connect to client's external calendar API here
             return f"Checking availability for {time}..."
     ```
+
+    `BaseTool` accepts an optional `config` dict for per-tenant parameterization.
 
 4.  **Deploy:** The system automatically loads the new tenant configuration on the next request.
 
 ---
 
-## ⚠️ Development Rules (Audit Checklist)
+## Key Features
 
-Before submitting code, verify against the **CODE_AUDIT_PROMPT**:
-
-* [ ] **Domain Boundaries:** Did I leak tenant logic into the core engine?
-* [ ] **Coupling:** Did I import a specific tenant module into `main.py`? (Forbidden. Use the Loader).
-* [ ] **Cognitive Load:** Is the code flow obvious? Can an LLM understand the file structure in 1 minute?
-* [ ] **Complexity Budget:** Did I introduce a new database or queue? If yes, where is the justification?
-
----
-
-## 🛠️ Quick Start (One Command!)
-
-### Development Mode (Automatic Setup)
-
-```bash
-# Install dependencies (first time only)
-pip install -r requirements.txt
-
-# Start everything with one command
-python scripts/start_dev.py
-```
-
-**That's it!** The script will:
-- ✅ Check FFmpeg installation
-- ✅ Check port availability (auto-switch if needed)
-- ✅ Create `.env` from example if missing
-- ✅ Start Mock PersonaPlex sidecar (port 9000)
-- ✅ Start Nexus Engine (port 8000)
-- ✅ Handle graceful shutdown (Ctrl+C)
-
-**Output:**
-```
-[CHECK] FFmpeg ✅
-[CHECK] Port 9000 free ✅
-[CHECK] Port 8000 free ✅
-[INFO] Starting Mock PersonaPlex Sidecar...
-[INFO] Starting Nexus Voice Engine...
-```
-
-### Manual Setup (Advanced)
-
-If you need more control:
-
-```bash
-# 1. Setup environment
-python -m venv env
-env\Scripts\activate  # Windows
-source env/bin/activate  # macOS/Linux
-
-# 2. Install dependencies
-pip install -r requirements.txt
-
-# 3. Configure
-cp env.example.new .env
-# Edit .env: Set GEMINI_API_KEY
-
-# 4. Start Mock Sidecar (Terminal 1)
-python tests/mock_personaplex.py
-
-# 5. Start Nexus Engine (Terminal 2)
-uvicorn src.main:app --host 0.0.0.0 --port 8000 --reload
-```
-
-### Test Real-Time Audio
-
-Open `test_audio.html` in your browser and click "Start Call".
-
-**For complete documentation, see `docs/PROJECT_CONTEXT.md`**
+- **Full-Duplex Audio Streaming** — Real-time bidirectional audio via WebSocket
+- **Pluggable Voice Providers** — ElevenLabs (recommended), NVIDIA PersonaPlex, or add your own
+- **Pluggable LLM Providers** — Gemini today, extensible to others via `ILLMProvider`
+- **Text-Only Fallback** — Graceful degradation when voice provider is unavailable
+- **Audio Transcoding** — FFmpeg pipeline for WebM / PCM conversion
+- **Barge-In Detection** — Interrupt AI when user speaks
+- **Multi-Tenant** — Complete isolation between tenants
+- **Config-Driven** — No hardcoded business logic
+- **Shared Integrations** — Reusable tools referenced by handler path across tenants
+- **Configurable CORS** — Set allowed origins via `CORS_ALLOWED_ORIGINS`
+- **Context-Aware Logging** — Color-coded, tenant-tagged logs (verbose audio logs at DEBUG level)
+- **Error Recovery** — Automatic reconnection with retry logic
+- **Production-Ready** — Robust error handling, clean FFmpeg/session cleanup
 
 ---
 
-## ⚙️ Configuration & Performance
+## Stability and Graceful Degradation
 
-### Gemini Transport Protocol (`GEMINI_TRANSPORT`)
-The system supports two transport protocols for communicating with Google Gemini:
-
-1.  **`rest` (Default)**: Uses standard HTTP/1.1 JSON.
-    *   **Pros**: Extremely stable, works on Windows/Mac/Linux, compatible with Uvicorn/Gunicorn.
-    *   **Cons**: Slightly higher latency (negligible for text).
-    *   **Use Case**: Development, Windows production, or ensuring maximum stability.
-
-2.  **`grpc`**: Uses HTTP/2 with Protocol Buffers.
-    *   **Pros**: Lowest possible latency and bandwidth.
-    *   **Cons**: Known compatibility issues with Uvicorn on Windows (causes deadlocks).
-    *   **Use Case**: High-performance Linux/Docker production environments.
-
-**To switch:**
-Set the environment variable in `.env` or Docker config:
-```bash
-GEMINI_TRANSPORT=grpc
-```
+1.  **Voice Provider Fallback:** If the active voice provider is unreachable, the engine degrades to **Text-Only Mode**. Conversations continue via WebSocket text until the provider recovers.
+2.  **Gemini REST Transport:** For environments where gRPC is unstable (e.g., Windows), the engine uses an async REST wrapper for non-blocking streaming.
+3.  **Clean Disconnects:** Sudden client disconnections are handled gracefully — all background threads, LLM streams, and FFmpeg processes are cancelled immediately to prevent resource leaks. `close_session` is fully async.
+4.  **Windows Compatibility:** Fixes for Starlette/Uvicorn race conditions and Windows-specific file system locks are built-in.
 
 ---
 
-## 📚 Documentation
+## Troubleshooting
 
-**All documentation is consolidated in one file:**
-
-**[`docs/PROJECT_CONTEXT.md`](docs/PROJECT_CONTEXT.md)** - Complete Documentation (1,200+ lines)
-- Executive Summary
-- Architecture Overview (Sidecar Pattern)
-- Data Flow Diagrams
-- Quick Start Guide (10 minutes)
-- Sidecar Architecture Deep Dive
-- Tenant Isolation Strategy
-- Logging Strategy
-- Tool Development Guide
-- Deployment Guide
-- Troubleshooting
-- Future Roadmap
-
-**Additional Files:**
-- `docs/ARCHITECT_PROMPT.md` - Architectural principles
-- `docs/SYSTEM_EXECUTION_PROMPT.md` - Execution rules
-- `SIDECAR_REFACTOR_SUMMARY.md` - Sidecar refactoring summary
+*   **"Session not found"**: Ensure you pass the **Conversation Session ID** (from the `connected` message), not the raw WebSocket UUID.
+*   **No audio?**: Verify the correct voice provider is configured in your tenant's `config.yaml`. For PersonaPlex, check `PERSONAPLEX_WS_URL`. For ElevenLabs, check `ELEVENLABS_API_KEY` and `ELEVENLABS_AGENT_ID`.
+*   **Latency on Windows**: Set `GEMINI_TRANSPORT=rest` to avoid gRPC deadlocks.
+*   **CORS errors**: Set `CORS_ALLOWED_ORIGINS` to your frontend's origin.
 
 ---
 
-## 🔥 Key Features
+## Documentation
 
-✅ **Full-Duplex Audio Streaming** - Real-time bidirectional audio via WebSocket  
-✅ **Sidecar Pattern** - PersonaPlex runs in external Docker container  
-✅ **Text-Only Fallback** - Transparently handles PersonaPlex unavailability  
-✅ **Audio Transcoding** - FFmpeg pipeline for WebM ↔ PCM conversion  
-✅ **Barge-In Detection** - Interrupt AI when user speaks  
-✅ **Multi-Tenant** - Complete isolation between tenants  
-✅ **Config-Driven** - No hardcoded business logic  
-✅ **Context-Aware Logging** - Color-coded, tenant-tagged logs  
-✅ **Error Recovery** - Automatic reconnection with retry logic  
-✅ **Production-Ready** - Robust error handling throughout
+All documentation is consolidated in:
 
----
+**[`docs/PROJECT_CONTEXT.md`](docs/PROJECT_CONTEXT.md)** — Complete documentation including architecture overview, data flow diagrams, deployment guide, and troubleshooting.
 
-## 🛡️ Stability & Graceful Degradation
-
-The Nexus Voice Engine is designed to be "Always-On" even if satellite services fail:
-
-1.  **PersonaPlex Fallback:** If the PersonaPlex sidecar is down or unreachable, the `AudioBridge` automatically degrades to **Text-Only Mode**. The conversation continues via WebSocket text messages until the audio service recovers.
-2.  **Gemini REST Transport:** For environments where GRPC is unstable (like Windows), the engine uses a robust **Async REST Wrapper**. It wraps standard synchronous Gemini REST calls in a high-performance producer thread to maintain non-blocking streaming.
-3.  **Clean Disconnects:** The orchestration logic handles sudden client disconnections or timeouts gracefully, ensuring all background threads and LLM streams are cancelled immediately to prevent resource leaks.
-4.  **Windows Compatibility:** Specific fixes for `starlette` / `uvicorn` race conditions and Windows-specific file system locks (Atomic Replace) are built-in.
-
----
-
-## 💡 Troubleshooting
-
-*   **"Session not found"**: Ensure you are passing the **Conversation Session ID** (returned in the `connected` message) rather than the raw WebSocket UUID for orchestration calls.
-*   **No audio?**: Check if `PERSONAPLEX_WS_URL` is correct and the mock or real sidecar is running. Look for "Starting model->client stream" in the logs.
-*   **Latency**: Ensure `GEMINI_TRANSPORT=rest` is set if you are on Windows to avoid the GRPC deadlock.
+Additional files:
+- `docs/ARCHITECT_PROMPT.md` — Architectural principles
+- `docs/SYSTEM_EXECUTION_PROMPT.md` — Execution rules
 
 ---

@@ -2,6 +2,7 @@ from dotenv import load_dotenv
 load_dotenv()  # MUST BE AT THE ABSOLUTE TOP
 
 import logging
+import os
 from fastapi import FastAPI, HTTPException, Request, WebSocket, WebSocketDisconnect
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
@@ -12,7 +13,7 @@ from config.logging_config import setup_logging
 from src.core.context import set_request_context, reset_context
 from src.tenants.loader import TenantLoader
 from src.core.orchestration.conversation_manager import ConversationManager
-from src.core.audio.streamer import AudioBridge
+from src.core.voice import VoiceBridge, create_voice_provider
 from src.core.history import SessionRecorder, FileSessionRepository
 from src.core.intelligence import PostCallIntelligenceEngine
 
@@ -24,14 +25,15 @@ logger = logging.getLogger("nexus.api")
 
 app = FastAPI(title="Nexus Voice Engine", version="1.0.0")
 
-# --- CORS Middleware (Enable for Test UI) ---
+# --- CORS Middleware ---
 from fastapi.middleware.cors import CORSMiddleware
+cors_origins = [o.strip() for o in os.getenv("CORS_ALLOWED_ORIGINS", "*").split(",")]
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # Allows all origins
+    allow_origins=cors_origins,
     allow_credentials=True,
-    allow_methods=["*"],  # Allows all methods
-    allow_headers=["*"],  # Allows all headers
+    allow_methods=["*"],
+    allow_headers=["*"],
 )
 
 # Initialize the conversation manager (singleton)
@@ -239,7 +241,7 @@ async def close_conversation(session_id: str):
     """
     Close and cleanup a conversation session.
     """
-    success = conversation_manager.close_session(session_id)
+    success = await conversation_manager.close_session(session_id)
     if not success:
         raise HTTPException(status_code=404, detail="Session not found")
     
@@ -356,17 +358,17 @@ async def websocket_conversation(websocket: WebSocket, session_id: str):
 async def call_endpoint(websocket: WebSocket, tenant_id: str, customer_phone: Optional[str] = None):
     """
     WebSocket endpoint for real-time audio streaming (PRIMARY ENDPOINT).
-    
-    This endpoint implements the Sidecar Pattern:
-    [User Phone/Browser] <-(WS)-> [Nexus Engine] <-(WS)-> [NVIDIA Docker Container]
-    
-    The flow:
+
+    Uses the Voice Provider abstraction — the actual backend (ElevenLabs,
+    PersonaPlex, etc.) is resolved from the tenant's voice_settings.provider.
+
+    Flow:
     1. Client connects with audio stream
     2. Load tenant configuration
-    3. Create AudioBridge to connect to PersonaPlex sidecar
-    4. Start bidirectional audio streaming with transcoding
+    3. Create VoiceBridge with the configured voice provider
+    4. Start bidirectional audio streaming
     5. Handle barge-in and interruptions
-    6. Cleanup on disconnect
+    6. Cleanup on disconnect + post-call intelligence
     
     Args:
         websocket: Client WebSocket connection
@@ -375,7 +377,7 @@ async def call_endpoint(websocket: WebSocket, tenant_id: str, customer_phone: Op
     """
     await websocket.accept()
     session_id = None
-    audio_bridge = None
+    voice_bridge = None
     session_recorder = None
     session_repository = None
     conversation_session = None
@@ -447,45 +449,40 @@ async def call_endpoint(websocket: WebSocket, tenant_id: str, customer_phone: Op
             await websocket.close(code=1011, reason="Session initialization error")
             return
         
-        # 3. Load Tenant Config for Voice Settings
-        try:
-            tenant_config = TenantLoader.load_tenant(tenant_id)
-            voice_settings = tenant_config.get("voice_settings", {})
-        except Exception as e:
-            logger.error(f"Failed to load tenant config: {e}")
-            voice_settings = {}
+        # 3. Extract Voice Settings from already-loaded tenant context
+        voice_settings = tenant_context.get("voice_settings", {})
 
         try:
-            # 4. Start Audio Bridge
-            audio_bridge = AudioBridge(
-                client_ws=websocket,
-                tenant_id=tenant_id,
-                session_id=session_id,
-                conversation_session_id=conversation_session.session_id,
-                system_prompt=conversation_session.system_prompt,
+            # 4. Create Voice Provider + Bridge
+            voice_provider = create_voice_provider(
                 voice_settings=voice_settings,
-                session_recorder=session_recorder
+                system_prompt=conversation_session.system_prompt,
+            )
+            voice_bridge = VoiceBridge(
+                client_ws=websocket,
+                provider=voice_provider,
+                session_id=session_id,
+                session_recorder=session_recorder,
             )
             # Store for cleanup
-            conversation_session.audio_bridge = audio_bridge
-            
-            logger.info("🎙️ AudioBridge created, connecting to PersonaPlex...")
-            
+            conversation_session.voice_bridge = voice_bridge
+
+            logger.info(f"🎙️ VoiceBridge created (provider={voice_settings.get('provider', 'default')})")
+
             # Send ready status
             await websocket.send_json({
                 "type": "ready",
                 "session_id": session_id,
-                "message": "Audio bridge ready. Start speaking!"
+                "message": "Voice bridge ready. Start speaking!"
             })
-            
+
             # Start the streaming loop (this blocks until disconnected)
-            await audio_bridge.process_stream()
-            
+            await voice_bridge.process_stream()
+
             logger.info(f"✅ Call completed normally: session={session_id}")
-            
+
         except ConnectionError as e:
-            # PersonaPlex connection failed
-            logger.error(f"❌ PersonaPlex connection failed: {e}")
+            logger.error(f"❌ Voice provider connection failed: {e}")
             if session_recorder:
                 session_recorder.log_error("connection_error", str(e))
                 session_recorder.finalize(status="ERROR")
@@ -529,8 +526,8 @@ async def call_endpoint(websocket: WebSocket, tenant_id: str, customer_phone: Op
     
     finally:
         # 1. STOP the bridge
-        if audio_bridge:
-            try: await audio_bridge.stop()
+        if voice_bridge:
+            try: await voice_bridge.stop()
             except: pass
         
         # 2. CAPTURE the recorder and CLOSE the session
@@ -542,7 +539,7 @@ async def call_endpoint(websocket: WebSocket, tenant_id: str, customer_phone: Op
                 effective_recorder = conv_sess.session_recorder
             
             # Close session (triggers manager's internal finalize)
-            conversation_manager.close_session(conversation_session.session_id)
+            await conversation_manager.close_session(conversation_session.session_id)
 
         # 3. ENRICH WITH INTELLIGENCE (The absolute last word)
         if effective_recorder:

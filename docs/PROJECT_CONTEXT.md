@@ -1,7 +1,7 @@
 # PROJECT CONTEXT: Nexus Voice Engine
 
-**Last Updated:** February 2026  
-**Architecture Tier:** Tier 2 - Business Logic Feature (Modular Monolith with Sidecar)  
+**Last Updated:** April 2026  
+**Architecture Tier:** Tier 2 - Business Logic Feature (Modular Monolith with Pluggable Providers)  
 **Status:** Production Ready - Real-Time Audio Streaming
 
 ---
@@ -9,21 +9,21 @@
 ## 1. EXECUTIVE SUMMARY
 
 Nexus Voice Engine is a **multi-tenant SaaS platform** that powers AI-driven voice agents with **real-time audio streaming**. It connects:
-- **NVIDIA PersonaPlex** (External Docker Sidecar) for GPU-accelerated audio processing
-- **Google Gemini** for high-intelligence conversational logic
+- **Pluggable Voice Providers** (ElevenLabs cloud API, NVIDIA PersonaPlex Docker sidecar, etc.) via `IVoiceProvider` interface
+- **Pluggable LLM Providers** (Google Gemini via factory pattern) for high-intelligence conversational logic
 - **Tenant-specific tools** for business operations (bookings, CRM, inventory, etc.)
 
-**Core Philosophy:** Config-driven, tenant-isolated, SSOT-compliant architecture with sidecar pattern for audio processing.
+**Core Philosophy:** Config-driven, tenant-isolated, SSOT-compliant architecture with pluggable voice and LLM providers.
 
-**Key Architecture Decision:** PersonaPlex runs as an **external Docker container** (sidecar microservice). Nexus acts as a WebSocket proxy/bridge, handling audio transcoding, barge-in detection, and connection management.
+**Key Architecture Decision:** Voice processing is abstracted behind `IVoiceProvider`. Providers are selected per-tenant via config. PersonaPlex runs as an external Docker sidecar; ElevenLabs connects to a cloud API. Nexus acts as a WebSocket proxy/bridge via `VoiceBridge`, handling audio transcoding, barge-in detection, and connection management.
 
 ---
 
 ## 2. ARCHITECTURE OVERVIEW
 
-### 2.1 High-Level System Design (Sidecar Pattern)
+### 2.1 High-Level System Design (Pluggable Voice Providers)
 
-**CRITICAL:** Nexus Voice Engine uses a **Sidecar Microservice Pattern** for audio processing.
+**CRITICAL:** Nexus Voice Engine uses a **VoiceBridge + IVoiceProvider** pattern for audio processing. Voice providers are pluggable: PersonaPlex uses a sidecar Docker container; ElevenLabs uses a cloud API.
 
 ```
 ┌──────────────────────────────────────────────────────────────────────┐
@@ -44,20 +44,21 @@ Nexus Voice Engine is a **multi-tenant SaaS platform** that powers AI-driven voi
 │         │                                                          │
 │         ▼                                                          │
 │  ┌──────────────────────────────────────────────────────┐        │
-│  │            AUDIO BRIDGE (Proxy/Transcoder)           │        │
+│  │        VOICE BRIDGE (Proxy + IVoiceProvider)         │        │
 │  │  ┌────────────┐  ┌─────────────┐  ┌──────────────┐ │        │
-│  │  │ WebSocket  │  │  FFmpeg     │  │  WebSocket   │ │        │
-│  │  │ from       │─▶│  Transcoder │─▶│  to          │ │        │
-│  │  │ Client     │  │  (WebM→PCM) │  │  PersonaPlex │ │        │
+│  │  │ WebSocket  │  │  Audio      │  │ IVoiceProvider│ │        │
+│  │  │ from       │─▶│  Transcoder │─▶│  .send()     │ │        │
+│  │  │ Client     │  │  (WebM→PCM) │  │              │ │        │
 │  │  └────────────┘  └─────────────┘  └──────────────┘ │        │
 │  │                                                      │        │
 │  │  ┌────────────┐  ┌─────────────┐  ┌──────────────┐ │        │
-│  │  │ WebSocket  │◀─│  FFmpeg     │◀─│  WebSocket   │ │        │
-│  │  │ to         │  │  Transcoder │  │  from        │ │        │
-│  │  │ Client     │  │  (PCM→WebM) │  │  PersonaPlex │ │        │
+│  │  │ WebSocket  │◀─│  Audio      │◀─│ IVoiceProvider│ │        │
+│  │  │ to         │  │  Transcoder │  │  .recv()     │ │        │
+│  │  │ Client     │  │  (PCM→WebM) │  │              │ │        │
 │  │  └────────────┘  └─────────────┘  └──────────────┘ │        │
 │  │  + Barge-in Detection                               │        │
 │  │  + Buffer Management                                │        │
+│  │  + Provider Factory (selects provider per tenant)   │        │
 │  └──────────────────────────────────────────────────────┘        │
 │         │                                                          │
 │         ▼                                                          │
@@ -71,45 +72,60 @@ Nexus Voice Engine is a **multi-tenant SaaS platform** that powers AI-driven voi
 │  └──────────────────────────────────────────────────────┘        │
 │                                                                   │
 └───────────────────────────────────────────────────────────────────┘
-         │                                     │
-         ▼                                     ▼
-   ┌──────────┐                    ┌─────────────────────────┐
-   │  Gemini  │                    │ NVIDIA PersonaPlex      │
-   │   API    │                    │ (External Docker)       │
-   │          │                    │ ws://localhost:9000     │
-   └──────────┘                    │ • GPU-accelerated       │
-                                   │ • WebSocket streaming   │
-                                   │ • Sidecar pattern       │
-                                   └─────────────────────────┘
+         │                          │                    │
+         ▼                          ▼                    ▼
+   ┌──────────┐          ┌──────────────────┐  ┌──────────────────┐
+   │  Gemini  │          │ ElevenLabs       │  │ PersonaPlex      │
+   │   API    │          │ (Cloud API)      │  │ (Docker Sidecar) │
+   │ (LLM)   │          │ • Cloud-hosted   │  │ ws://localhost:9000│
+   └──────────┘          │ • REST/WebSocket │  │ • GPU-accelerated │
+                         └──────────────────┘  │ • Sidecar pattern │
+                                               └──────────────────┘
 ```
 
-### 2.2 Sidecar Pattern Explained
+### 2.2 Voice Provider Architecture
 
-**Why Sidecar?**
+**Provider Pattern:** Voice processing is abstracted behind `IVoiceProvider` (`src/core/voice/base_provider.py`). Providers are resolved per-tenant by `ProviderFactory` (`src/core/voice/provider_factory.py`).
+
+**Available Providers:**
+| Provider | Module | Transport | Notes |
+|----------|--------|-----------|-------|
+| **ElevenLabs** | `src/core/voice/elevenlabs_provider.py` | Cloud REST/WebSocket API | No local infrastructure required |
+| **PersonaPlex** | `src/core/voice/personaplex_provider.py` | Local Docker sidecar (`ws://localhost:9000`) | Requires GPU, sidecar pattern (see below) |
+
+**PersonaPlex Sidecar Pattern (provider-specific):**
+
+The sidecar pattern applies specifically to the PersonaPlex provider, not the whole system. ElevenLabs is cloud-based and requires no sidecar.
+
+*Why Sidecar for PersonaPlex?*
 1. **Resource Isolation:** PersonaPlex requires significant GPU resources (multiple GB of VRAM)
 2. **Independent Scaling:** Scale audio processing independently from orchestration logic
 3. **Development Flexibility:** Can mock PersonaPlex for testing without GPU
 4. **Deployment Independence:** Update PersonaPlex without redeploying Nexus
 5. **Technology Separation:** GPU-heavy C++/CUDA code separate from Python orchestration
 
-**Communication Flow:**
-1. **User Phone/Browser** → WebSocket → **Nexus Engine** (This app)
-2. **Nexus Engine** → Audio Transcoding (FFmpeg) → WebSocket → **PersonaPlex Docker**
-3. **PersonaPlex Docker** → PCM Audio → WebSocket → **Nexus Engine**
-4. **Nexus Engine** → Audio Transcoding (FFmpeg) → WebSocket → **User Phone/Browser**
+**Communication Flow (generic, applies to all providers):**
+1. **User Phone/Browser** → WebSocket → **Nexus Engine** (VoiceBridge)
+2. **VoiceBridge** → Audio Transcoding → **IVoiceProvider.send()**
+3. **IVoiceProvider.recv()** → Audio → **VoiceBridge**
+4. **VoiceBridge** → Audio Transcoding → WebSocket → **User Phone/Browser**
 
 **Key Benefits:**
-- ✅ Independent deployment (PersonaPlex updates don't affect Nexus)
-- ✅ Resource isolation (GPU usage separate from Python process)
-- ✅ Horizontal scaling (can run multiple PersonaPlex instances)
-- ✅ Development flexibility (mock PersonaPlex for testing)
+- ✅ Provider-agnostic orchestration (swap providers via tenant config)
+- ✅ Independent deployment (provider updates don't affect Nexus core)
+- ✅ Resource isolation (GPU usage separate from Python process, when applicable)
+- ✅ Development flexibility (mock any provider for testing)
 
 ### 2.3 Core Components
 
 | Component | Location | Responsibility | Coupling |
 |-----------|----------|---------------|----------|
 | **FastAPI Server** | `src/main.py` | HTTP/WebSocket endpoints, lifecycle management | Core |
-| **AudioBridge** | `src/core/audio/streamer.py` | **Dual WebSocket proxy, audio transcoding, barge-in** | Core |
+| **VoiceBridge** | `src/core/voice/bridge.py` | **WebSocket proxy, audio transcoding, barge-in, provider dispatch** | Core |
+| **IVoiceProvider** | `src/core/voice/base_provider.py` | Abstract interface for pluggable voice providers | Interface |
+| **ProviderFactory** | `src/core/voice/provider_factory.py` | Resolves voice provider per tenant config | Core |
+| **ElevenLabsProvider** | `src/core/voice/elevenlabs_provider.py` | Cloud-based voice provider (ElevenLabs API) | Integration |
+| **PersonaPlexProvider** | `src/core/voice/personaplex_provider.py` | Sidecar voice provider (Docker WebSocket) | Integration |
 | **Context Manager** | `src/core/context.py` | Thread-safe request/tenant tracking | Core |
 | **Logging System** | `config/logging_config.py` | Colored, context-aware structured logging | Core |
 | **Tenant Loader** | `src/tenants/loader.py` | Dynamic config/tool loading | Core |
@@ -117,7 +133,8 @@ Nexus Voice Engine is a **multi-tenant SaaS platform** that powers AI-driven voi
 | **Base Tool** | `src/interfaces/base_tool.py` | Abstract contract for all tools | Interface |
 | **Tenant Configs** | `src/tenants/*/config.yaml` | Business-specific prompts, tools, voice settings | Tenant |
 | **Tenant Tools** | `src/tenants/*/tools.py` | Executable Python functions for external integrations | Tenant |
-| **PersonaPlex Sidecar** | External Docker | **GPU-accelerated audio processing (NOT in this codebase)** | External |
+| **PersonaPlex Sidecar** | External Docker | **GPU-accelerated audio processing (NOT in this codebase, used by PersonaPlexProvider)** | External |
+| **Integrations** | `src/integrations/` | External service integrations (Google Calendar, mocks, etc.) | Integration |
 | **SessionRecorder** | `src/core/history.py` | In-memory buffer for capturing real-time conversation events | Core |
 | **FileSessionRepository** | `src/core/history.py` | File-based session persistence implementation | Core |
 | **ISessionRepository** | `src/interfaces/session_repository.py` | Abstract interface for session persistence | Interface |
@@ -132,31 +149,31 @@ Nexus Voice Engine is a **multi-tenant SaaS platform** that powers AI-driven voi
 sequenceDiagram
     participant User as User Phone/Browser
     participant Client as Client WebSocket
-    participant Nexus as Nexus Engine (AudioBridge)
-    participant PersonaPlex as PersonaPlex Docker
-    participant Gemini as Google Gemini
+    participant Nexus as Nexus Engine (VoiceBridge)
+    participant Provider as IVoiceProvider (ElevenLabs / PersonaPlex / ...)
+    participant Gemini as Google Gemini (via LLM Factory)
 
     User->>Client: Initiate call
     Client->>Nexus: WebSocket connect /ws/call/{tenant_id}
     Nexus->>Nexus: Load tenant config
-    Nexus->>Nexus: Create AudioBridge
-    Nexus->>PersonaPlex: WebSocket connect (sidecar)
-    PersonaPlex-->>Nexus: Connected
+    Nexus->>Nexus: Create VoiceBridge + resolve IVoiceProvider
+    Nexus->>Provider: Connect (cloud API or sidecar WebSocket)
+    Provider-->>Nexus: Connected
     Nexus-->>Client: Ready for audio
 
     loop Real-time Audio Streaming
         User->>Client: Speak (WebM/Opus audio)
         Client->>Nexus: Send audio bytes
-        Nexus->>Nexus: Transcode WebM→PCM (FFmpeg)
-        Nexus->>PersonaPlex: Send PCM audio
-        PersonaPlex->>PersonaPlex: Process (GPU)
-        PersonaPlex->>Gemini: Transcription + LLM query
-        Gemini-->>PersonaPlex: Response text
-        PersonaPlex->>PersonaPlex: TTS synthesis (GPU)
-        PersonaPlex->>Nexus: Send PCM audio
+        Nexus->>Nexus: Transcode WebM→PCM
+        Nexus->>Provider: Send PCM audio
+        Provider->>Provider: Process (cloud or GPU)
+        Provider->>Gemini: Transcription + LLM query
+        Gemini-->>Provider: Response text
+        Provider->>Provider: TTS synthesis
+        Provider->>Nexus: Send PCM audio
         Nexus->>Nexus: Check barge-in
         alt Client NOT speaking
-            Nexus->>Nexus: Transcode PCM→WebM (FFmpeg)
+            Nexus->>Nexus: Transcode PCM→WebM
             Nexus->>Client: Send audio bytes
             Client->>User: Play response
         else Client IS speaking (Barge-in)
@@ -165,7 +182,7 @@ sequenceDiagram
     end
 
     Client->>Nexus: Disconnect
-    Nexus->>PersonaPlex: Close connection
+    Nexus->>Provider: Close connection
     Nexus->>Nexus: Cleanup session
 ```
 
@@ -233,29 +250,29 @@ sequenceDiagram
 ```mermaid
 sequenceDiagram
     participant Client
-    participant AudioBridge
+    participant VoiceBridge
     participant SessionRecorder
     participant Repository
     participant FileSystem
 
-    Client->>AudioBridge: WebSocket connect
-    AudioBridge->>SessionRecorder: Initialize (tenant_id, session_id)
+    Client->>VoiceBridge: WebSocket connect
+    VoiceBridge->>SessionRecorder: Initialize (tenant_id, session_id)
     SessionRecorder->>SessionRecorder: Log "connection_established"
     
     loop Audio Streaming
-        Client->>AudioBridge: Audio chunk
-        AudioBridge->>SessionRecorder: log_user_audio(duration, bytes)
-        AudioBridge->>PersonaPlex: Send PCM
-        PersonaPlex->>AudioBridge: Response audio
-        AudioBridge->>SessionRecorder: log_ai_audio(duration, bytes)
-        AudioBridge->>Client: Send audio
+        Client->>VoiceBridge: Audio chunk
+        VoiceBridge->>SessionRecorder: log_user_audio(duration, bytes)
+        VoiceBridge->>Provider: Send PCM
+        Provider->>VoiceBridge: Response audio
+        VoiceBridge->>SessionRecorder: log_ai_audio(duration, bytes)
+        VoiceBridge->>Client: Send audio
     end
     
-    Note over AudioBridge: User speaks while AI talks
-    AudioBridge->>SessionRecorder: log_barge_in()
+    Note over VoiceBridge: User speaks while AI talks
+    VoiceBridge->>SessionRecorder: log_barge_in()
     
-    Client->>AudioBridge: Disconnect
-    AudioBridge->>SessionRecorder: finalize(status="COMPLETED")
+    Client->>VoiceBridge: Disconnect
+    VoiceBridge->>SessionRecorder: finalize(status="COMPLETED")
     SessionRecorder->>Repository: save_session(tenant_id, session_data)
     Repository->>FileSystem: Write JSON to data/history/{tenant_id}/{session_id}.json
 ```

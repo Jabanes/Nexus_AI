@@ -9,9 +9,8 @@ This module is the heart of the voice engine. It:
 """
 import logging
 import uuid
-import asyncio
 from typing import Dict, Any, List, Optional, AsyncGenerator
-from src.core.llm.gemini_client import GeminiClient
+from src.core.llm import create_llm_provider
 from src.core.orchestration.tool_executor import ToolExecutor
 from src.interfaces.base_tool import BaseTool
 from src.core.history import SessionRecorder, FileSessionRepository
@@ -66,7 +65,7 @@ class ConversationManager:
     
     def __init__(self):
         """Initialize the conversation manager."""
-        self.gemini_client = GeminiClient()
+        self.llm_provider = create_llm_provider()
         self.active_sessions: Dict[str, ConversationSession] = {}
         self.session_repository = FileSessionRepository()
         logger.info("ConversationManager initialized")
@@ -94,7 +93,7 @@ class ConversationManager:
         logger.info(f"Creating new session for tenant: {tenant_id}")
         
         # Initialize Gemini chat session
-        chat_session = self.gemini_client.create_chat_session(system_prompt, tools)
+        chat_session = self.llm_provider.create_chat_session(system_prompt, tools)
         
         # Initialize tool executor
         tool_executor = ToolExecutor(tools)
@@ -131,29 +130,29 @@ class ConversationManager:
         """
         return self.active_sessions.get(session_id)
     
-    def close_session(self, session_id: str) -> bool:
+    async def close_session(self, session_id: str) -> bool:
         """
         Close and remove a session.
-        
+
         Args:
             session_id: The session ID to close
-            
+
         Returns:
             True if session was closed, False if not found
         """
         if session_id in self.active_sessions:
             session = self.active_sessions[session_id]
-            
+
             # Finalize recording
             try:
                 session.session_recorder.finalize()
-                asyncio.create_task(self.session_repository.save_session(
-                    session.tenant_id, 
+                await self.session_repository.save_session(
+                    session.tenant_id,
                     session.session_recorder.export()
-                ))
+                )
             except Exception as e:
                 logger.error(f"Error saving session {session_id}: {e}")
-                
+
             del self.active_sessions[session_id]
             logger.info(f"Session {session_id} closed")
             return True
@@ -198,7 +197,7 @@ class ConversationManager:
         
         try:
             # Send message to Gemini
-            llm_response = await self.gemini_client.send_message(
+            llm_response = await self.llm_provider.send_message(
                 session.chat_session,
                 user_message
             )
@@ -230,7 +229,7 @@ class ConversationManager:
                     
                     # Send result back to Gemini
                     if execution_result["success"]:
-                        final_text = await self.gemini_client.send_function_response(
+                        final_text = await self.llm_provider.send_function_response(
                             session.chat_session,
                             tool_name,
                             execution_result["result"]
@@ -238,7 +237,7 @@ class ConversationManager:
                     else:
                         # Tool failed - inform the LLM
                         error_msg = f"Tool execution failed: {execution_result['error']}"
-                        final_text = await self.gemini_client.send_function_response(
+                        final_text = await self.llm_provider.send_function_response(
                             session.chat_session,
                             tool_name,
                             error_msg
@@ -316,7 +315,7 @@ class ConversationManager:
         
         try:
             # Initial request
-            stream = self.gemini_client.send_message_stream(
+            stream = self.llm_provider.send_message_stream(
                 session.chat_session, 
                 user_message
             )
@@ -373,7 +372,7 @@ class ConversationManager:
                     # Send result back to Gemini and get NEW stream
                     result_payload = execution_result["result"] if execution_result["success"] else f"Error: {execution_result['error']}"
                     
-                    stream = self.gemini_client.send_function_response_stream(
+                    stream = self.llm_provider.send_function_response_stream(
                         session.chat_session,
                         tool_name,
                         result_payload
