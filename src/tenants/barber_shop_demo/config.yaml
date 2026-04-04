@@ -2,11 +2,15 @@ tenant_id: "barber_shop_01"
 
 voice_settings:
   provider: "elevenlabs"
-  voice_id: "NATM0.pt"
-  language: "he-IL"
+  voice_id: "JBFqnCBsd6RMkjVDRZzb"
+  language: "en"
   provider_specific: {}
   # To use ElevenLabs, set ELEVENLABS_API_KEY and ELEVENLABS_AGENT_ID in .env
   # To use PersonaPlex instead, change provider to "nvidia_personaplex"
+
+# ─── Language ─────────────────────────────────────────────
+# The agent will ONLY respond in this language.
+language: "en"
 
 # ─── Identity & Behavior ─────────────────────────────────
 # WHO the agent is and HOW it behaves.
@@ -16,6 +20,7 @@ system_prompt: |
   Your role is to book appointments and answer questions.
   Be brief, polite, and efficient.
   Do not invent information that does not exist in your tools or business data.
+  You MUST respond ONLY in English.
 
 # ─── Static Knowledge ─────────────────────────────────────
 # WHAT the agent knows — prices, hours, policies.

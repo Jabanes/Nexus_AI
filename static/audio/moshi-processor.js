@@ -119,11 +119,6 @@ class MoshiProcessor extends AudioWorkletProcessor {
     }
 
     process(inputs, outputs, parameters) {
-        console.log("[WORKLET PROCESS]", {
-            framesRequested: outputs[0][0].length,
-            bufferAvailable: this.currentSamples()
-        });
-
         // We assume 1 output, 1 channel (or copy mono to all channels)
         const output = outputs[0];
         const channel0 = output[0]; // Left/Mono channel

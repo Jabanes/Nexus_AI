@@ -6,10 +6,10 @@ No GPU sidecar needed — all processing happens in the cloud.
 
 Audio pipeline:
   Input:  Browser WebM -> FFmpeg -> PCM16 LE 16kHz -> base64 -> ElevenLabs WS
-  Output: ElevenLabs WS -> base64 PCM16 -> FFmpeg -> Ogg/Opus -> Browser
+  Output: ElevenLabs WS -> base64 PCM16 -> raw bytes -> Browser (decoded in JS)
 
-The output is re-encoded to Ogg/Opus so the existing browser client
-(WASM Opus decoder + AudioWorklet) works without changes.
+Output audio is sent as raw PCM16 to the browser. The browser converts
+PCM16 to Float32 and plays via AudioWorklet. No output FFmpeg needed.
 """
 
 import asyncio
@@ -32,6 +32,9 @@ from src.core.voice.base_provider import (
 )
 
 logger = logging.getLogger(__name__)
+
+# Audio tag for raw PCM16 frames (distinct from 0x01 Ogg used by PersonaPlex)
+AUDIO_TAG_PCM16 = 0x02
 
 
 class ElevenLabsProvider(IVoiceProvider):
@@ -64,7 +67,6 @@ class ElevenLabsProvider(IVoiceProvider):
         self.ws: Optional[Any] = None
         self.is_running = False
         self._input_transcoder: Optional[asyncio.subprocess.Process] = None
-        self._output_transcoder: Optional[asyncio.subprocess.Process] = None
         self._tasks: list = []
 
         # Diagnostics
@@ -81,9 +83,8 @@ class ElevenLabsProvider(IVoiceProvider):
     # ------------------------------------------------------------------
 
     async def connect(self) -> None:
-        """Start FFmpeg transcoders and connect to ElevenLabs WS."""
+        """Start input FFmpeg transcoder and connect to ElevenLabs WS."""
         await self._start_input_transcoder()
-        await self._start_output_transcoder()
         await self._connect_ws()
 
     async def send_audio(self, data: bytes) -> None:
@@ -98,19 +99,17 @@ class ElevenLabsProvider(IVoiceProvider):
         on_transcript: OnTranscriptCallback,
         on_error: OnErrorCallback,
     ) -> None:
-        """Run three internal tasks: input pump, WS receiver, output pump."""
+        """Run two internal tasks: input pump and WS receiver."""
         self.is_running = True
 
         task_input = asyncio.create_task(
             self._pump_pcm_to_ws(), name="el_input_pump"
         )
         task_ws = asyncio.create_task(
-            self._pump_ws_receiver(on_transcript, on_error), name="el_ws_receiver"
+            self._pump_ws_receiver(on_audio, on_transcript, on_error),
+            name="el_ws_receiver",
         )
-        task_output = asyncio.create_task(
-            self._pump_output_to_browser(on_audio), name="el_output_pump"
-        )
-        self._tasks = [task_input, task_ws, task_output]
+        self._tasks = [task_input, task_ws]
 
         logger.info("ElevenLabsProvider: streaming tasks launched")
 
@@ -127,19 +126,15 @@ class ElevenLabsProvider(IVoiceProvider):
         logger.info("ElevenLabsProvider stopping...")
         self.is_running = False
 
-        # Kill FFmpeg processes
-        for name, proc in [
-            ("input", self._input_transcoder),
-            ("output", self._output_transcoder),
-        ]:
-            if proc:
-                try:
-                    proc.kill()
-                    await asyncio.wait_for(proc.wait(), timeout=5.0)
-                except asyncio.TimeoutError:
-                    logger.warning(f"FFmpeg {name} did not exit within 5s")
-                except Exception:
-                    pass
+        # Kill input FFmpeg
+        if self._input_transcoder:
+            try:
+                self._input_transcoder.kill()
+                await asyncio.wait_for(self._input_transcoder.wait(), timeout=5.0)
+            except asyncio.TimeoutError:
+                logger.warning("FFmpeg input did not exit within 5s")
+            except Exception:
+                pass
 
         # Close WS
         if self.ws:
@@ -181,21 +176,6 @@ class ElevenLabsProvider(IVoiceProvider):
             stderr=asyncio.subprocess.PIPE,
         )
         logger.info(f"ElevenLabs input transcoder started (PID={self._input_transcoder.pid})")
-
-    async def _start_output_transcoder(self):
-        """FFmpeg: raw PCM16 LE 16kHz mono stdin -> Ogg/Opus stdout (for browser)."""
-        self._output_transcoder = await asyncio.create_subprocess_exec(
-            self.ffmpeg_path,
-            "-hide_banner", "-loglevel", "error",
-            "-f", "s16le", "-ar", "16000", "-ac", "1", "-i", "pipe:0",
-            "-c:a", "libopus", "-b:a", "24k",
-            "-application", "lowdelay",
-            "-f", "ogg", "pipe:1",
-            stdin=asyncio.subprocess.PIPE,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE,
-        )
-        logger.info(f"ElevenLabs output transcoder started (PID={self._output_transcoder.pid})")
 
     async def _connect_ws(self):
         """Connect to ElevenLabs Conversational AI WebSocket."""
@@ -261,6 +241,7 @@ class ElevenLabsProvider(IVoiceProvider):
 
     async def _pump_ws_receiver(
         self,
+        on_audio: OnAudioCallback,
         on_transcript: OnTranscriptCallback,
         on_error: OnErrorCallback,
     ):
@@ -273,7 +254,7 @@ class ElevenLabsProvider(IVoiceProvider):
                 event_type = data.get("type", "")
 
                 if event_type == "audio":
-                    # Audio chunk — decode and write to output FFmpeg
+                    # Audio chunk — decode base64 and send PCM16 directly to browser
                     audio_event = data.get("audio_event", {})
                     b64_audio = audio_event.get("audio_base_64", "")
                     if b64_audio:
@@ -281,9 +262,15 @@ class ElevenLabsProvider(IVoiceProvider):
                         self.audio_chunks_received += 1
                         self.total_bytes_rx += len(pcm_bytes)
 
-                        if self._output_transcoder and self._output_transcoder.stdin:
-                            self._output_transcoder.stdin.write(pcm_bytes)
-                            await self._output_transcoder.stdin.drain()
+                        # Send raw PCM16 with tag 0x02 so browser knows the format
+                        tagged_frame = bytes([AUDIO_TAG_PCM16]) + pcm_bytes
+                        await on_audio(tagged_frame)
+
+                        if self.audio_chunks_received <= 3:
+                            logger.info(
+                                f"[ElevenLabs AUDIO_TX #{self.audio_chunks_received}] "
+                                f"pcm16 size={len(pcm_bytes)}"
+                            )
 
                 elif event_type == "user_transcript":
                     transcript_event = data.get("user_transcription_event", {})
@@ -307,13 +294,14 @@ class ElevenLabsProvider(IVoiceProvider):
                     logger.info("[ElevenLabs] Barge-in detected")
 
                 elif event_type == "ping":
-                    # Respond to keep-alive
-                    pong = json.dumps({"type": "pong", "event_id": data.get("ping_event", {}).get("event_id")})
+                    pong = json.dumps({
+                        "type": "pong",
+                        "event_id": data.get("ping_event", {}).get("event_id"),
+                    })
                     await self.ws.send(pong)
 
                 elif event_type == "conversation_initiation_metadata":
-                    # Already handled in connect, ignore duplicates
-                    pass
+                    pass  # Already handled in connect
 
                 else:
                     logger.debug(f"[ElevenLabs] Unhandled event: {event_type}")
@@ -329,31 +317,3 @@ class ElevenLabsProvider(IVoiceProvider):
                 f"ElevenLabs: WS receiver exited "
                 f"(audio_rx={self.audio_chunks_received} transcripts={self.transcripts_received})"
             )
-
-    async def _pump_output_to_browser(self, on_audio: OnAudioCallback):
-        """Read Ogg/Opus from output FFmpeg, forward to browser via callback."""
-        logger.info("ElevenLabs: output pump started")
-        ogg_chunks_sent = 0
-        try:
-            while self.is_running:
-                chunk = await self._output_transcoder.stdout.read(4096)
-                if not chunk:
-                    logger.warning("ElevenLabs: output FFmpeg stdout EOF")
-                    break
-
-                # Tag with 0x01 for browser compatibility (same as PersonaPlex)
-                tagged_frame = b"\x01" + chunk
-                await on_audio(tagged_frame)
-
-                ogg_chunks_sent += 1
-                if ogg_chunks_sent <= 5:
-                    logger.info(
-                        f"[ElevenLabs AUDIO_TX #{ogg_chunks_sent}] "
-                        f"ogg size={len(chunk)} header={chunk[:4].hex()}"
-                    )
-
-        except Exception as e:
-            logger.error(f"ElevenLabs output pump error: {e}")
-            logger.error(traceback.format_exc())
-        finally:
-            logger.info(f"ElevenLabs: output pump exited (ogg_chunks={ogg_chunks_sent})")
