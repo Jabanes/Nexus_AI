@@ -14,6 +14,7 @@ from src.core.context import set_request_context, reset_context
 from src.tenants.loader import TenantLoader
 from src.core.orchestration.conversation_manager import ConversationManager
 from src.core.voice import VoiceBridge, create_voice_provider
+from src.core.orchestration.tool_executor import ToolExecutor
 from src.core.history import SessionRecorder, FileSessionRepository
 from src.core.intelligence import PostCallIntelligenceEngine
 
@@ -35,6 +36,15 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+# --- Static Files (test UI + audio worklet) ---
+from fastapi.staticfiles import StaticFiles
+from fastapi.responses import FileResponse
+app.mount("/static", StaticFiles(directory="static"), name="static")
+
+@app.get("/test")
+async def test_ui():
+    return FileResponse("test_call.html")
 
 # Initialize the conversation manager (singleton)
 conversation_manager = ConversationManager()
@@ -259,6 +269,80 @@ async def get_stats():
         "engine_version": "1.0.0",
         "status": "operational"
     }
+
+
+# --- Tool Webhook (Provider-Agnostic) ---
+# Any voice provider (ElevenLabs, PersonaPlex.io, etc.) can call this
+# endpoint when its LLM decides to execute a tool.
+
+@app.post("/webhook/tool/{tenant_id}")
+async def webhook_tool_execution(tenant_id: str, request: Request):
+    """
+    Provider-agnostic tool execution webhook.
+
+    Voice providers call this when their LLM wants to execute a tool.
+    The request body format varies by provider, but we normalize it to:
+    {tool_name, parameters} and execute against the tenant's registered tools.
+
+    ElevenLabs format: {"tool_call_id": "...", "tool_name": "...", "parameters": {...}}
+    Generic format:    {"tool_name": "...", "parameters": {...}}
+    """
+    set_request_context(tenant_id=tenant_id)
+    logger.info(f"Tool webhook called for tenant: {tenant_id}")
+
+    try:
+        body = await request.json()
+    except Exception:
+        raise HTTPException(status_code=400, detail="Invalid JSON body")
+
+    logger.debug(f"Webhook body: {body}")
+
+    # Normalize: ElevenLabs sends flat body with tool_name + params as siblings
+    # e.g. {"tool_name": "check_availability", "date": "2026-04-06"}
+    # Generic format: {"tool_name": "...", "parameters": {...}}
+    tool_name = body.get("tool_name") or body.get("name", "")
+    tool_call_id = body.get("tool_call_id", "")
+
+    if not tool_name:
+        raise HTTPException(status_code=400, detail="Missing tool_name")
+
+    # Extract parameters: either nested under "parameters" or flat alongside tool_name
+    parameters = body.get("parameters")
+    if parameters is None:
+        # ElevenLabs flat format — everything except meta fields IS the parameters
+        parameters = {k: v for k, v in body.items() if k not in ("tool_name", "tool_call_id", "name")}
+
+    # Load tenant tools
+    try:
+        tenant_context = TenantLoader.load_tenant(tenant_id)
+    except FileNotFoundError:
+        raise HTTPException(status_code=404, detail="Tenant not found")
+
+    # Build executor and run
+    executor = ToolExecutor(tenant_context["tools"])
+    result = await executor.execute_tool(tool_name, parameters)
+
+    result_text = result.get("result", "") if result["success"] else result.get("error", "Tool execution failed")
+    logger.info(f"Tool '{tool_name}' executed: success={result['success']} result={str(result_text)[:200]}")
+
+    # Log tool call to any active session for this tenant
+    for session in conversation_manager.get_sessions_by_tenant(tenant_id):
+        if session.session_recorder:
+            session.session_recorder.log_tool_usage(
+                tool_name=tool_name,
+                tool_input=parameters,
+                tool_output=result_text,
+            )
+
+    # Return in a format voice providers understand
+    response = {
+        "tool_call_id": tool_call_id,
+        "tool_name": tool_name,
+        "result": result_text,
+        "success": result["success"],
+    }
+
+    return response
 
 
 @app.websocket("/ws/conversation/{session_id}")
@@ -529,54 +613,85 @@ async def call_endpoint(websocket: WebSocket, tenant_id: str, customer_phone: Op
         if voice_bridge:
             try: await voice_bridge.stop()
             except: pass
-        
-        # 2. CAPTURE the recorder and CLOSE the session
-        # We close the session FIRST to let the manager do its basic cleanup
-        effective_recorder = session_recorder
+
+        # 2. CLOSE the conversation session
         if conversation_session:
-            conv_sess = conversation_manager.get_session(conversation_session.session_id)
-            if conv_sess and conv_sess.session_recorder:
-                effective_recorder = conv_sess.session_recorder
-            
-            # Close session (triggers manager's internal finalize)
             await conversation_manager.close_session(conversation_session.session_id)
 
-        # 3. ENRICH WITH INTELLIGENCE (The absolute last word)
-        if effective_recorder:
-            try:
-                # Ensure the recorder is in a finalized state so it has a transcript
-                if effective_recorder.status == "IN_PROGRESS":
-                    effective_recorder.finalize(status="COMPLETED")
+        # 3. SYNC DATA FROM VOICE PROVIDER
+        # If ElevenLabs, pull the full conversation from their API (transcripts,
+        # tool calls, analysis, cost). For other providers, use our local recorder.
+        try:
+            el_conversation_id = None
+            if voice_bridge and hasattr(voice_bridge.provider, 'conversation_id'):
+                el_conversation_id = voice_bridge.provider.conversation_id
 
-                # Run AI Analysis on the finalized data
-                intelligence_engine = PostCallIntelligenceEngine()
-                analysis = await intelligence_engine.analyze_session(
-                    session_data=effective_recorder.session_data,
-                    customer_phone=customer_phone
-                )
-                
-                # Merge analysis back into memory
-                effective_recorder.session_data["summary"] = {
-                    "intent": analysis.get("core_intent", "Inquiry"),
-                    "outcome": analysis.get("call_outcome", "Resolved"),
-                    "sentiment": analysis.get("sentiment", "Neutral"),
-                    "summary": analysis.get("summary", ""),
-                    "follow_up_required": analysis.get("follow_up_required", False)
-                }
-                
-                # UPDATE METADATA
-                if analysis.get("customer_name"):
-                    effective_recorder.session_data["meta"]["customer_name"] = analysis["customer_name"]
+            if el_conversation_id:
+                # ElevenLabs path — pull rich data from their API
+                from src.core.voice.elevenlabs_sync import ElevenLabsSync
+                import asyncio
 
-                # 4. FINAL OVERWRITE: This save wins the race
-                file_path = await effective_recorder.save_session()
-                logger.info(f"💾 FINAL enriched session saved: {file_path}")
+                # Wait a moment for ElevenLabs to finalize the conversation
+                await asyncio.sleep(2)
 
-            except Exception as e:
-                logger.error(f"❌ Final enrichment failed: {e}")
+                sync = ElevenLabsSync()
+                el_data = await sync.pull_conversation(el_conversation_id)
+
+                if el_data:
+                    session_data = sync.convert_to_session(
+                        el_data=el_data,
+                        tenant_id=tenant_id,
+                        session_id=session_id,
+                        customer_phone=customer_phone or "",
+                    )
+                    repository = FileSessionRepository()
+                    file_path = await repository.save_session(tenant_id, session_data)
+                    logger.info(f"💾 ElevenLabs session synced: {file_path}")
+                else:
+                    logger.warning("ElevenLabs sync returned no data, falling back to local recorder")
+                    await _save_local_session(session_recorder, session_id, tenant_id, customer_phone)
+            else:
+                # Non-ElevenLabs path — use local recorder + intelligence engine
+                await _save_local_session(session_recorder, session_id, tenant_id, customer_phone)
+
+        except Exception as e:
+            logger.error(f"❌ Session save failed: {e}")
 
         logger.info(f"🔚 Call endpoint cleanup complete: session={session_id}")
         reset_context()
+
+
+async def _save_local_session(session_recorder, session_id, tenant_id, customer_phone):
+    """Fallback: save session using our local recorder + post-call intelligence."""
+    if not session_recorder:
+        return
+
+    try:
+        if session_recorder.status == "IN_PROGRESS":
+            session_recorder.finalize(status="COMPLETED")
+
+        intelligence_engine = PostCallIntelligenceEngine()
+        analysis = await intelligence_engine.analyze_session(
+            session_data=session_recorder.session_data,
+            customer_phone=customer_phone,
+        )
+
+        session_recorder.session_data["summary"] = {
+            "intent": analysis.get("core_intent", "Inquiry"),
+            "outcome": analysis.get("call_outcome", "Resolved"),
+            "sentiment": analysis.get("sentiment", "Neutral"),
+            "summary": analysis.get("summary", ""),
+            "follow_up_required": analysis.get("follow_up_required", False),
+        }
+
+        if analysis.get("customer_name"):
+            session_recorder.session_data["meta"]["customer_name"] = analysis["customer_name"]
+
+        file_path = await session_recorder.save_session()
+        logger.info(f"💾 Local session saved: {file_path}")
+
+    except Exception as e:
+        logger.error(f"❌ Local session save failed: {e}")
 
 
 if __name__ == "__main__":

@@ -45,13 +45,26 @@ knowledge_base:
     - "Late arrival over 15 minutes - appointment cancelled"
 
 # ─── Tools ────────────────────────────────────────────────
-# Handler-ref style: shared integration tools with per-tenant config
 enabled_tools:
   - name: "check_availability"
-    handler: "src.integrations.mock.tools.MockCheckAvailabilityTool"
+    handler: "src.integrations.calendar.tools.CheckAvailabilityTool"
     config:
-      calendar_id: "yossi@gmail.com"
+      tenant_id: "barber_shop_01"
+      default_duration_min: 30
+      business_hours:
+        sunday_thursday: "09:00-20:00"
+        friday: "09:00-14:00"
+        saturday: "Closed"
   - name: "book_appointment"
-    handler: "src.integrations.mock.tools.MockBookAppointmentTool"
+    handler: "src.integrations.calendar.tools.BookAppointmentTool"
     config:
-      calendar_id: "yossi@gmail.com"
+      tenant_id: "barber_shop_01"
+      default_duration_min: 30
+      business_hours:
+        sunday_thursday: "09:00-20:00"
+        friday: "09:00-14:00"
+        saturday: "Closed"
+  - name: "update_appointment"
+    handler: "src.integrations.calendar.tools.UpdateAppointmentTool"
+    config:
+      tenant_id: "barber_shop_01"

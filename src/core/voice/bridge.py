@@ -1,8 +1,5 @@
 """
 Voice Bridge — Thin orchestrator between browser WebSocket and voice provider.
-
-This replaces the monolithic AudioBridge. It knows nothing about specific
-providers — it only shuttles bytes between the client and an IVoiceProvider.
 """
 
 import asyncio
@@ -18,10 +15,6 @@ logger = logging.getLogger(__name__)
 
 
 class VoiceBridge:
-    """
-    Manages the bidirectional audio stream between a browser WebSocket
-    and an IVoiceProvider implementation.
-    """
 
     def __init__(
         self,
@@ -35,48 +28,43 @@ class VoiceBridge:
         self.session_id = session_id
         self.recorder = session_recorder
         self.is_running = False
-        self._tasks: list = []
+        self._client_task = None
 
         logger.info(f"VoiceBridge initialized: session={session_id}")
 
     async def process_stream(self):
-        """
-        Main entry point. Connects to provider, starts bidirectional streaming.
-        Blocks until one side disconnects or errors.
-        """
         logger.info(f"VoiceBridge: starting stream for session={self.session_id}")
         try:
-            # 1. Connect to the voice backend
             await self.provider.connect()
             logger.info("VoiceBridge: provider connected")
 
             self.is_running = True
 
-            # 2. Launch two concurrent tasks
-            task_client = asyncio.create_task(
+            # Client input runs as background task — if it dies, the call continues.
+            # Only the PROVIDER controls the call lifecycle.
+            self._client_task = asyncio.create_task(
                 self._handle_client_input(), name="bridge_client_input"
             )
-            task_provider = asyncio.create_task(
-                self.provider.run(
-                    on_audio=self._on_provider_audio,
-                    on_transcript=self._on_provider_transcript,
-                    on_error=self._on_provider_error,
-                ),
-                name="bridge_provider_run",
-            )
-            self._tasks = [task_client, task_provider]
 
-            logger.info("VoiceBridge: streaming tasks launched")
-
-            # 3. Wait for first completion
-            done, pending = await asyncio.wait(
-                self._tasks, return_when=asyncio.FIRST_COMPLETED
+            # This blocks until the ElevenLabs conversation ends
+            await self.provider.run(
+                on_audio=self._on_provider_audio,
+                on_transcript=self._on_provider_transcript,
+                on_error=self._on_provider_error,
             )
-            for t in done:
-                exc = t.exception() if not t.cancelled() else None
-                logger.warning(
-                    f"VoiceBridge FIRST_COMPLETED: task={t.get_name()} exception={exc}"
-                )
+
+            logger.info("VoiceBridge: provider run ended, sending end signal to browser")
+
+            # Provider ended — give browser time to play remaining audio
+            try:
+                await self.client_ws.send_json({
+                    "type": "conversation_ended",
+                    "message": "Conversation complete.",
+                })
+            except Exception:
+                pass
+
+            await asyncio.sleep(3)
 
         except ConnectionError as e:
             logger.error(f"VoiceBridge: provider connection failed: {e}")
@@ -96,36 +84,34 @@ class VoiceBridge:
         try:
             while self.is_running:
                 msg = await self.client_ws.receive()
+                msg_type = msg.get("type", "unknown")
 
                 if "bytes" in msg:
-                    data = msg["bytes"]
                     chunks_received += 1
-                    await self.provider.send_audio(data)
+                    await self.provider.send_audio(msg["bytes"])
 
-                elif "type" in msg and msg["type"] == "websocket.disconnect":
-                    logger.info("VoiceBridge: client sent disconnect")
-                    self.is_running = False
+                elif msg_type == "websocket.disconnect":
+                    code = msg.get("code", "?")
+                    logger.info(f"VoiceBridge: browser disconnected (code={code})")
+                    # DON'T set is_running = False — let the provider finish
                     break
 
                 elif "text" in msg:
                     logger.debug(f"VoiceBridge: client text: {msg['text'][:100]}")
 
         except Exception as e:
-            logger.error(f"VoiceBridge: client input error: {e}")
-            logger.error(traceback.format_exc())
+            logger.warning(f"VoiceBridge: client input error: {type(e).__name__}: {e}")
         finally:
             logger.info(f"VoiceBridge: client input exited (chunks_rx={chunks_received})")
 
     async def _on_provider_audio(self, data: bytes) -> None:
-        """Callback: forward audio bytes from provider to browser."""
         try:
             await self.client_ws.send_bytes(data)
-        except RuntimeError:
-            logger.warning("VoiceBridge: client WS closed, stopping")
-            self.is_running = False
+        except Exception:
+            pass  # Browser might have disconnected — don't crash the provider
 
     async def _on_provider_transcript(self, event: TranscriptEvent) -> None:
-        """Callback: forward transcript to browser and record."""
+        logger.info(f"VoiceBridge transcript [{event.role}]: {event.text[:100]}")
         try:
             await self.client_ws.send_json({
                 "type": "transcript",
@@ -133,12 +119,9 @@ class VoiceBridge:
                 "content": event.text,
                 "is_final": event.is_final,
             })
-        except RuntimeError:
-            logger.warning("VoiceBridge: client WS closed during transcript send")
-            self.is_running = False
-            return
+        except Exception:
+            pass  # Browser might have disconnected — don't crash the provider
 
-        # Record to session history
         if self.recorder:
             if event.role == "user":
                 self.recorder.log_user_text(event.text)
@@ -146,16 +129,14 @@ class VoiceBridge:
                 self.recorder.log_ai_text(event.text)
 
     async def _on_provider_error(self, error: Exception) -> None:
-        """Callback: handle recoverable provider errors."""
         logger.error(f"VoiceBridge: provider error: {error}")
         if self.recorder:
             self.recorder.log_error("provider_error", str(error))
 
     async def stop(self):
-        """Stop the bridge and provider."""
         logger.info("VoiceBridge stopping...")
         self.is_running = False
         await self.provider.stop()
-        for t in self._tasks:
-            t.cancel()
+        if self._client_task and not self._client_task.done():
+            self._client_task.cancel()
         logger.info("VoiceBridge stopped")

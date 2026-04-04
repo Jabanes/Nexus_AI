@@ -48,6 +48,12 @@ logs/
 *.db
 
 # ------------------------------------------------
+# Data (appointments, history, sessions)
+# ------------------------------------------------
+data/appointments/
+data/history/
+
+# ------------------------------------------------
 # Voice & Audio Data (Project Specific)
 # ------------------------------------------------
 # We don't want to commit recorded calls or temp audio

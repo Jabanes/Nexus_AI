@@ -165,6 +165,18 @@
 
     <script>
         // ============================================================
+        // GLOBAL ERROR HANDLER — prevent page crashes
+        // ============================================================
+        window.onerror = (msg, src, line, col, err) => {
+            console.error('[GLOBAL ERROR]', msg, src, line, col, err);
+            return true; // prevent default
+        };
+        window.onunhandledrejection = (e) => {
+            console.error('[UNHANDLED PROMISE]', e.reason);
+            e.preventDefault();
+        };
+
+        // ============================================================
         // STATE
         // ============================================================
         const ELEVENLABS_SAMPLE_RATE = 16000;
@@ -309,6 +321,7 @@
             ws.binaryType = 'arraybuffer';
 
             ws.onopen = () => {
+                console.log('[WS] onopen');
                 setStatus('Connected', 'connected');
                 document.getElementById('btnConnect').disabled = true;
                 document.getElementById('btnDisconnect').disabled = false;
@@ -333,18 +346,21 @@
                         try {
                             playPCM16(payload);
                             if (stats.pcmChunksPlayed <= 5) {
+                                console.log(`[AUDIO] PCM16 chunk: ${payload.byteLength}B = ${payload.byteLength/2} samples`);
                                 log(`[PCM16] ${payload.byteLength}B = ${payload.byteLength/2} samples`, 'rx');
                             }
                         } catch (e) {
                             stats.playErrors++;
+                            console.error('[AUDIO] Play error:', e);
                             log(`Play error: ${e.message}`, 'err');
                         }
 
                     } else if (tag === 0x01) {
-                        // Ogg/Opus from PersonaPlex
+                        console.log(`[AUDIO] OGG chunk: ${payload.byteLength}B`);
                         log(`[OGG] ${payload.byteLength}B (PersonaPlex format)`, 'rx');
 
                     } else {
+                        console.log(`[BIN] Unknown tag=0x${tag.toString(16)} ${payload.byteLength}B`);
                         log(`[BIN] tag=0x${tag.toString(16)} ${payload.byteLength}B`, 'rx');
                     }
                 } else {
@@ -352,6 +368,7 @@
                     stats.textMsgsRx++;
                     try {
                         const data = JSON.parse(event.data);
+                        console.log('[WS] JSON message:', data.type, data);
 
                         if (data.type === 'transcript') {
                             const role = data.role || 'agent';
@@ -364,23 +381,33 @@
                             addTranscript('system', 'Ready — start speaking!');
                             log('Voice bridge ready', 'info');
                         } else if (data.type === 'error') {
+                            console.error('[WS] Error from server:', data);
                             addTranscript('system', `Error: ${data.message}`);
                             log(`Error: ${data.message}`, 'err');
+                        } else if (data.type === 'conversation_ended') {
+                            console.log('[WS] Conversation ended normally');
+                            addTranscript('system', 'Conversation ended.');
+                            log('Conversation ended', 'info');
                         } else {
                             log(`MSG: ${JSON.stringify(data)}`, 'rx');
                         }
                     } catch (e) {
+                        console.log('[WS] Non-JSON text:', event.data);
                         log(`Text: ${event.data}`, 'rx');
                     }
                 }
             };
 
             ws.onclose = (e) => {
-                log(`WS closed: code=${e.code} reason=${e.reason || 'none'}`, 'info');
+                console.warn(`[WS] onclose: code=${e.code} reason=${e.reason} wasClean=${e.wasClean}`);
+                log(`WS closed: code=${e.code} reason=${e.reason || 'none'} clean=${e.wasClean}`, 'info');
                 stopCall();
             };
 
-            ws.onerror = () => log('WS error', 'err');
+            ws.onerror = (e) => {
+                console.error('[WS] onerror:', e);
+                log('WS error', 'err');
+            };
         }
 
         // ============================================================
@@ -405,6 +432,13 @@
                         stats.audioChunksTx++;
                         ws.send(e.data);
                     }
+                };
+                recorder.onerror = (e) => {
+                    console.error('[RECORDER] error:', e);
+                    log(`Recorder error: ${e.error?.message || 'unknown'}`, 'err');
+                };
+                recorder.onstop = () => {
+                    console.warn('[RECORDER] stopped');
                 };
                 recorder.start(100); // 100ms chunks
                 log('Mic streaming (100ms chunks)', 'info');
