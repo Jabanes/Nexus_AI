@@ -170,6 +170,72 @@ class LeadsDB:
     async def init_schema(self) -> None:
         await asyncio.to_thread(self.init_schema_sync)
 
+    # ── Users ──────────────────────────────────────────────────────
+    async def create_user(
+        self,
+        user_id: str,
+        email: str,
+        password_hash: str,
+        name: Optional[str] = None,
+        role: str = "owner",
+    ) -> None:
+        def _do():
+            with sqlite3.connect(self.path) as conn:
+                conn.execute(
+                    """
+                    INSERT INTO users (user_id, email, password_hash, name, role)
+                    VALUES (?, ?, ?, ?, ?)
+                    """,
+                    (user_id, email, password_hash, name, role),
+                )
+                conn.commit()
+        async with self._lock:
+            await asyncio.to_thread(_do)
+
+    async def get_user_by_id(self, user_id: str) -> Optional[Dict[str, Any]]:
+        def _do():
+            with sqlite3.connect(self.path) as conn:
+                conn.row_factory = sqlite3.Row
+                row = conn.execute("SELECT * FROM users WHERE user_id = ?", (user_id,)).fetchone()
+                return dict(row) if row else None
+        return await asyncio.to_thread(_do)
+
+    async def get_user_by_email(self, email: str) -> Optional[Dict[str, Any]]:
+        def _do():
+            with sqlite3.connect(self.path) as conn:
+                conn.row_factory = sqlite3.Row
+                row = conn.execute("SELECT * FROM users WHERE email = ?", (email,)).fetchone()
+                return dict(row) if row else None
+        return await asyncio.to_thread(_do)
+
+    async def list_users(self) -> List[Dict[str, Any]]:
+        def _do():
+            with sqlite3.connect(self.path) as conn:
+                conn.row_factory = sqlite3.Row
+                rows = conn.execute("SELECT user_id, email, name, role, created_at FROM users ORDER BY created_at").fetchall()
+                return [dict(r) for r in rows]
+        return await asyncio.to_thread(_do)
+
+    async def assign_tenant_to_user(self, tenant_id: str, user_id: str) -> None:
+        """Set tenants.owner_user_id. Used by the create_user CLI."""
+        def _do():
+            with sqlite3.connect(self.path) as conn:
+                conn.execute(
+                    "UPDATE tenants SET owner_user_id = ?, updated_at = CURRENT_TIMESTAMP WHERE tenant_id = ?",
+                    (user_id, tenant_id),
+                )
+                conn.commit()
+        async with self._lock:
+            await asyncio.to_thread(_do)
+
+    async def get_tenant(self, tenant_id: str) -> Optional[Dict[str, Any]]:
+        def _do():
+            with sqlite3.connect(self.path) as conn:
+                conn.row_factory = sqlite3.Row
+                row = conn.execute("SELECT * FROM tenants WHERE tenant_id = ?", (tenant_id,)).fetchone()
+                return dict(row) if row else None
+        return await asyncio.to_thread(_do)
+
     # ── Tenants ────────────────────────────────────────────────────
     async def upsert_tenant(
         self,
@@ -206,16 +272,22 @@ class LeadsDB:
                 return [dict(r) for r in rows]
         return await asyncio.to_thread(_do)
 
-    async def list_tenants_with_stats(self) -> List[Dict[str, Any]]:
+    async def list_tenants_with_stats(
+        self,
+        owner_user_id: Optional[str] = None,
+    ) -> List[Dict[str, Any]]:
         """
         One row per business, joined with aggregate call stats.
+        If owner_user_id is given, filters to tenants owned by that user (RLS).
         Used by the businesses list view ("home" dashboard).
         """
         def _do():
             with sqlite3.connect(self.path) as conn:
                 conn.row_factory = sqlite3.Row
+                where = "WHERE t.owner_user_id = ?" if owner_user_id else ""
+                params = (owner_user_id,) if owner_user_id else ()
                 rows = conn.execute(
-                    """
+                    f"""
                     SELECT
                         t.*,
                         COALESCE(c.total, 0)            AS total_calls,
@@ -241,8 +313,10 @@ class LeadsDB:
                         FROM calls
                         GROUP BY tenant_id
                     ) c ON c.tenant_id = t.tenant_id
+                    {where}
                     ORDER BY t.tenant_id
-                    """
+                    """,
+                    params,
                 ).fetchall()
                 return [dict(r) for r in rows]
         return await asyncio.to_thread(_do)

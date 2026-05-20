@@ -3,7 +3,7 @@ load_dotenv()  # MUST BE AT THE ABSOLUTE TOP
 
 import logging
 import os
-from fastapi import FastAPI, HTTPException, Request, WebSocket, WebSocketDisconnect
+from fastapi import Depends, FastAPI, HTTPException, Request, WebSocket, WebSocketDisconnect
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 from typing import Optional
@@ -37,6 +37,26 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+# --- Session Middleware (signed cookie, no server-side state) ---
+from starlette.middleware.sessions import SessionMiddleware
+_session_secret = os.getenv("SESSION_SECRET")
+if not _session_secret:
+    import secrets as _secrets
+    _session_secret = _secrets.token_urlsafe(32)
+    logger.warning(
+        "SESSION_SECRET not set — generated a random one for this process. "
+        "Sessions will be invalidated on every restart. Set SESSION_SECRET in .env "
+        "to persist sessions across restarts."
+    )
+app.add_middleware(
+    SessionMiddleware,
+    secret_key=_session_secret,
+    session_cookie="nexus_session",
+    https_only=False,    # set True behind TLS in prod
+    same_site="lax",
+    max_age=60 * 60 * 24 * 14,  # 14 days
+)
+
 # --- Static Files (test UI + audio worklet) ---
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse
@@ -47,8 +67,48 @@ async def test_ui():
     return FileResponse("test_call.html")
 
 
+# ── Auth endpoints ──────────────────────────────────────────────────
+from src.integrations.auth.dependencies import get_current_user, require_tenant_owner
+from src.integrations.auth.passwords import verify_password
+
+
+class LoginPayload(BaseModel):
+    email: str
+    password: str
+
+
+@app.post("/api/auth/login")
+async def auth_login(request: Request, payload: LoginPayload):
+    from src.integrations.leads.db import get_db
+    db = get_db()
+    user = await db.get_user_by_email(payload.email)
+    if not user or not verify_password(payload.password, user.get("password_hash", "")):
+        raise HTTPException(status_code=401, detail="Invalid email or password")
+    request.session["user_id"] = user["user_id"]
+    return {"ok": True, "user": {"user_id": user["user_id"], "email": user["email"], "name": user.get("name"), "role": user.get("role")}}
+
+
+@app.post("/api/auth/logout")
+async def auth_logout(request: Request):
+    request.session.clear()
+    return {"ok": True}
+
+
+@app.get("/api/auth/me")
+async def auth_me(user=Depends(get_current_user)):
+    # Strip password_hash before returning
+    return {k: v for k, v in user.items() if k != "password_hash"}
+
+
+@app.get("/login")
+async def login_page():
+    return FileResponse("static/login.html")
+
+
+# ── Per-tenant data endpoints (gated by RLS) ────────────────────────
+
 @app.get("/leads/{tenant_id}/xlsx")
-async def download_leads_xlsx(tenant_id: str):
+async def download_leads_xlsx(tenant_id: str, _ctx=Depends(require_tenant_owner)):
     """Generate and download the per-tenant leads ledger as XLSX (export view from DB)."""
     from pathlib import Path as _Path
     from src.integrations.leads.xlsx_repository import build_xlsx_from_db
@@ -69,13 +129,13 @@ async def api_list_calls(
     since: Optional[str] = None,
     limit: int = 200,
     offset: int = 0,
+    _ctx=Depends(require_tenant_owner),
 ):
-    """JSON list of calls for a tenant (dashboard data source)."""
+    """JSON list of calls for a tenant (dashboard data source). RLS-gated."""
     from src.integrations.leads.db import get_db
     from src.integrations.leads.cost import credits_to_usd, credits_per_usd
     db = get_db()
     calls = await db.list_calls(tenant_id, classification=classification, since=since, limit=limit, offset=offset)
-    # Enrich each call with USD cost
     for c in calls:
         c["cost_usd"] = credits_to_usd(c.get("cost_credits"))
     stats = await db.stats(tenant_id)
@@ -90,15 +150,16 @@ async def api_list_calls(
 
 
 @app.get("/api/businesses")
-async def api_list_businesses():
-    """
-    List all businesses with aggregate stats. Used by the home dashboard.
-    Will be filtered by owner_user_id once the auth layer lands.
-    """
+async def api_list_businesses(user=Depends(get_current_user)):
+    """List businesses owned by the current user (RLS-filtered)."""
     from src.integrations.leads.db import get_db
     from src.integrations.leads.cost import credits_to_usd
     db = get_db()
-    rows = await db.list_tenants_with_stats()
+    # Admins see everything; everyone else sees only what they own.
+    if user.get("role") == "admin":
+        rows = await db.list_tenants_with_stats()
+    else:
+        rows = await db.list_tenants_with_stats(owner_user_id=user["user_id"])
     for r in rows:
         r["total_cost_usd"] = credits_to_usd(r.get("total_cost"))
     return {"businesses": rows}
@@ -106,16 +167,14 @@ async def api_list_businesses():
 
 @app.get("/dashboard")
 async def dashboard_home():
-    """Top-level dashboard: list of businesses owned by the (eventual) user."""
+    """Top-level dashboard: list of businesses. Auth gating happens client-side
+    via /api/auth/me (page redirects to /login on 401)."""
     return FileResponse("static/dashboard_home.html")
 
 
 @app.get("/dashboard/{tenant_id}")
 async def dashboard(tenant_id: str):
-    """
-    Business detail dashboard. The HTML is static; the page reads tenant_id
-    from window.location.pathname and calls /api/leads/{tenant_id}/calls.
-    """
+    """Business detail dashboard shell. RLS enforced by /api/leads/.../calls call."""
     logger.debug(f"Dashboard request for tenant={tenant_id}")
     return FileResponse("static/dashboard.html")
 
@@ -125,7 +184,7 @@ async def dashboard(tenant_id: str):
 # All three live under /artifacts/{tenant_id}/{kind}/{call_id}.
 
 @app.get("/artifacts/{tenant_id}/{kind}/{call_id}")
-async def serve_artifact(tenant_id: str, kind: str, call_id: str):
+async def serve_artifact(tenant_id: str, kind: str, call_id: str, _ctx=Depends(require_tenant_owner)):
     """
     Serve a per-call artifact (transcript HTML, MP3 audio, or session JSON).
 

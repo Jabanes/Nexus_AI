@@ -1,0 +1,85 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Sign in — Nexus Voice</title>
+<style>
+* { box-sizing: border-box; }
+html, body { margin: 0; padding: 0; background: #0f1117; color: #e6e6ec; font-family: -apple-system, "Segoe UI", system-ui, sans-serif; height: 100%; }
+.wrap { min-height: 100vh; display: flex; align-items: center; justify-content: center; padding: 20px; }
+.card { background: #16181f; border: 1px solid #232634; border-radius: 12px; padding: 32px; width: 100%; max-width: 380px; }
+h1 { margin: 0 0 6px 0; font-size: 1.3rem; }
+h1 .accent { color: #5ac8fa; }
+.sub { color: #8a8f9c; font-size: 0.85rem; margin-bottom: 24px; }
+label { display: block; font-size: 0.78rem; color: #8a8f9c; text-transform: uppercase; letter-spacing: 0.05em; margin-bottom: 6px; margin-top: 14px; }
+input { width: 100%; background: #1a1d27; color: #e6e6ec; border: 1px solid #2a2e3d; border-radius: 6px; padding: 10px 12px; font-size: 0.95rem; }
+input:focus { outline: none; border-color: #5ac8fa; }
+button { width: 100%; margin-top: 22px; background: #5ac8fa; color: #001824; border: none; border-radius: 6px; padding: 11px; font-weight: 600; font-size: 0.95rem; cursor: pointer; }
+button:hover { background: #38b6ed; }
+button:disabled { opacity: 0.6; cursor: not-allowed; }
+.error { background: #3a1f24; border: 1px solid #5a2a30; color: #ff8b8b; padding: 10px 12px; border-radius: 6px; margin-top: 16px; font-size: 0.88rem; display: none; }
+.error.show { display: block; }
+.foot { margin-top: 20px; color: #8a8f9c; font-size: 0.78rem; text-align: center; }
+</style>
+</head>
+<body>
+<div class="wrap">
+<form class="card" id="form">
+    <h1>Nexus <span class="accent">Voice</span></h1>
+    <p class="sub">Sign in to your dashboard</p>
+
+    <label for="email">Email</label>
+    <input id="email" name="email" type="email" required autofocus autocomplete="email">
+
+    <label for="password">Password</label>
+    <input id="password" name="password" type="password" required autocomplete="current-password">
+
+    <button type="submit" id="submit">Sign in</button>
+    <div class="error" id="err"></div>
+    <div class="foot">No public signup. Accounts are provisioned by an admin.</div>
+</form>
+</div>
+
+<script>
+const form = document.getElementById('form');
+const errEl = document.getElementById('err');
+const btn = document.getElementById('submit');
+
+form.addEventListener('submit', async (e) => {
+    e.preventDefault();
+    errEl.classList.remove('show');
+    btn.disabled = true;
+    btn.textContent = 'Signing in…';
+
+    try {
+        const resp = await fetch('/api/auth/login', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            credentials: 'same-origin',
+            body: JSON.stringify({
+                email:    document.getElementById('email').value.trim(),
+                password: document.getElementById('password').value,
+            }),
+        });
+        const data = await resp.json().catch(() => ({}));
+        if (!resp.ok) {
+            errEl.textContent = data.detail || `Sign-in failed (${resp.status})`;
+            errEl.classList.add('show');
+            btn.disabled = false;
+            btn.textContent = 'Sign in';
+            return;
+        }
+        // Success — go to dashboard (or any ?next=... param)
+        const params = new URLSearchParams(window.location.search);
+        window.location.href = params.get('next') || '/dashboard';
+    } catch (err) {
+        errEl.textContent = `Network error: ${err.message}`;
+        errEl.classList.add('show');
+        btn.disabled = false;
+        btn.textContent = 'Sign in';
+    }
+});
+</script>
+</body>
+</html>

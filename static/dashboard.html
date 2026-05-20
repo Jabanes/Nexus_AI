@@ -69,7 +69,12 @@ td.cost { font-family: ui-monospace, Menlo, monospace; color: #f5d068; }
         <div class="crumb"><a href="/dashboard">← All businesses</a></div>
         <h1>Calls — <span class="tenant" id="tenantName">…</span></h1>
     </div>
-    <span class="muted" id="lastUpdated">loading…</span>
+    <div style="text-align: right">
+        <span class="muted" id="lastUpdated">loading…</span>
+        <div style="margin-top: 6px; font-size: 0.8rem; color: #8a8f9c;">
+            <span id="userName">…</span> · <a href="#" id="logout" style="color:#8a8f9c">logout</a>
+        </div>
+    </div>
 </header>
 
 <div class="stats">
@@ -122,7 +127,15 @@ async function fetchAndRender() {
     const url = new URL(`/api/leads/${tenantId}/calls`, window.location.origin);
     if (classification) url.searchParams.set('classification', classification);
     try {
-        const resp = await fetch(url);
+        const resp = await fetch(url, { credentials: 'same-origin' });
+        if (resp.status === 401) {
+            window.location.href = '/login?next=' + encodeURIComponent(window.location.pathname);
+            return;
+        }
+        if (resp.status === 403) {
+            $content.innerHTML = `<div class="error">You do not have access to this business.</div>`;
+            return;
+        }
         if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
         const data = await resp.json();
         render(data);
@@ -131,6 +144,26 @@ async function fetchAndRender() {
         $content.innerHTML = `<div class="error">Failed to load: ${e.message}</div>`;
     }
 }
+
+async function loadMe() {
+    try {
+        const resp = await fetch('/api/auth/me', { credentials: 'same-origin' });
+        if (resp.status === 401) {
+            window.location.href = '/login?next=' + encodeURIComponent(window.location.pathname);
+            return;
+        }
+        const me = await resp.json();
+        document.getElementById('userName').textContent = me.name || me.email || 'logged in';
+    } catch (e) { /* ignored */ }
+}
+
+document.getElementById('logout').addEventListener('click', async (e) => {
+    e.preventDefault();
+    await fetch('/api/auth/logout', { method: 'POST', credentials: 'same-origin' });
+    window.location.href = '/login';
+});
+
+loadMe();
 
 function renderStats(stats) {
     const get = (k) => stats[k] != null ? stats[k] : 0;

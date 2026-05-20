@@ -55,8 +55,8 @@ header .user .role { color: #8a8f9c; font-size: 0.75rem; text-transform: upperca
 <header>
     <h1>My <span class="accent">Businesses</span></h1>
     <div class="user">
-        <div class="name">Erez Habani</div>
-        <div class="role">Owner · dev mode (no auth)</div>
+        <div class="name" id="userName">…</div>
+        <div class="role"><span id="userRole">…</span> · <a href="#" id="logout" style="color:#8a8f9c">logout</a></div>
     </div>
 </header>
 
@@ -84,16 +84,42 @@ function escapeHtml(s) {
     return String(s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 }
 
+async function fetchJsonAuth(url) {
+    const resp = await fetch(url, { credentials: 'same-origin' });
+    if (resp.status === 401) {
+        window.location.href = '/login?next=' + encodeURIComponent(window.location.pathname);
+        throw new Error('redirecting to login');
+    }
+    if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+    return resp.json();
+}
+
+async function loadMe() {
+    try {
+        const me = await fetchJsonAuth('/api/auth/me');
+        document.getElementById('userName').textContent = me.name || me.email;
+        document.getElementById('userRole').textContent = (me.role || 'owner') + (me.email ? ' · ' + me.email : '');
+    } catch (e) { /* redirect already started */ }
+}
+
+document.getElementById('logout').addEventListener('click', async (e) => {
+    e.preventDefault();
+    await fetch('/api/auth/logout', { method: 'POST', credentials: 'same-origin' });
+    window.location.href = '/login';
+});
+
 async function load() {
     try {
-        const resp = await fetch('/api/businesses');
-        if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
-        const data = await resp.json();
+        const data = await fetchJsonAuth('/api/businesses');
         render(data.businesses || []);
     } catch (e) {
-        document.getElementById('content').innerHTML = `<div class="error">Failed to load: ${e.message}</div>`;
+        if (e.message !== 'redirecting to login') {
+            document.getElementById('content').innerHTML = `<div class="error">Failed to load: ${e.message}</div>`;
+        }
     }
 }
+
+loadMe();
 
 function render(list) {
     if (list.length === 0) {
