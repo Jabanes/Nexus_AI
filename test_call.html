@@ -237,7 +237,7 @@
         // ============================================================
         async function loadTenants() {
             try {
-                const resp = await fetch(`http://${window.location.hostname}:8000/tenants`);
+                const resp = await fetch(`${window.location.protocol}//${window.location.host}/tenants`);
                 const data = await resp.json();
                 const select = document.getElementById('tenantSelect');
                 select.innerHTML = '';
@@ -313,7 +313,8 @@
 
             // 3. WebSocket
             const tenant = document.getElementById('tenantSelect').value;
-            const wsUrl = `ws://${window.location.hostname}:8000/ws/call/${tenant}?customer_phone=test`;
+            const wsProto = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+            const wsUrl = `${wsProto}//${window.location.host}/ws/call/${tenant}?customer_phone=test`;
             log(`Connecting to: ${wsUrl}`, 'info');
             setStatus('Connecting...', 'connecting');
 

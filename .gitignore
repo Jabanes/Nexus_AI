@@ -48,10 +48,11 @@ logs/
 *.db
 
 # ------------------------------------------------
-# Data (appointments, history, sessions)
+# Data (appointments, history, sessions, leads)
 # ------------------------------------------------
 data/appointments/
 data/history/
+data/leads/
 
 # ------------------------------------------------
 # Voice & Audio Data (Project Specific)

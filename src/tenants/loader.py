@@ -110,6 +110,7 @@ class TenantLoader:
             "voice_settings": config.get("voice_settings", {}),
             "knowledge_base": knowledge,
             "tools": loaded_tools,
+            "lead_capture": config.get("lead_capture", {}),
         }
 
     @staticmethod

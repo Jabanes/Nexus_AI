@@ -23,8 +23,11 @@ RUN pip install --no-cache-dir -r requirements.txt
 # Copy source code
 COPY src/ ./src/
 COPY config/ ./config/
-# copy other necessary dirs if they are required for runtime
-# COPY data/ ./data/ # Excluded in .dockerignore but might be needed as mount point
+COPY test_call.html ./
+COPY static/ ./static/
+
+# Create data dir so mounted volume gets proper ownership
+RUN mkdir -p /app/data/history /app/data/leads
 
 # Create a non-root user for security
 RUN addgroup --system nexusgroup && adduser --system --group nexususer

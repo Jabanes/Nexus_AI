@@ -46,6 +46,21 @@ app.mount("/static", StaticFiles(directory="static"), name="static")
 async def test_ui():
     return FileResponse("test_call.html")
 
+
+@app.get("/leads/{tenant_id}/xlsx")
+async def download_leads_xlsx(tenant_id: str):
+    """Download the per-tenant leads ledger as XLSX."""
+    from pathlib import Path as _Path
+    path = _Path(f"data/leads/{tenant_id}/leads.xlsx")
+    if not path.exists():
+        from fastapi import HTTPException
+        raise HTTPException(status_code=404, detail=f"No leads file yet for tenant '{tenant_id}'")
+    return FileResponse(
+        path,
+        filename=f"{tenant_id}_leads.xlsx",
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    )
+
 # Initialize the conversation manager (singleton)
 conversation_manager = ConversationManager()
 
@@ -465,6 +480,7 @@ async def call_endpoint(websocket: WebSocket, tenant_id: str, customer_phone: Op
     session_recorder = None
     session_repository = None
     conversation_session = None
+    tenant_context = None
     
     try:
         # Generate session ID
@@ -629,11 +645,8 @@ async def call_endpoint(websocket: WebSocket, tenant_id: str, customer_phone: Op
             if el_conversation_id:
                 # ElevenLabs path — pull rich data from their API
                 from src.core.voice.elevenlabs_sync import ElevenLabsSync
-                import asyncio
 
-                # Wait a moment for ElevenLabs to finalize the conversation
-                await asyncio.sleep(2)
-
+                # pull_conversation handles its own backoff until analysis is populated
                 sync = ElevenLabsSync()
                 el_data = await sync.pull_conversation(el_conversation_id)
 
@@ -647,6 +660,18 @@ async def call_endpoint(websocket: WebSocket, tenant_id: str, customer_phone: Op
                     repository = FileSessionRepository()
                     file_path = await repository.save_session(tenant_id, session_data)
                     logger.info(f"💾 ElevenLabs session synced: {file_path}")
+
+                    # Optional per-tenant leads pipeline (spam filter + xlsx + mp3)
+                    if (tenant_context or {}).get("lead_capture", {}).get("enabled"):
+                        try:
+                            from src.integrations.leads.pipeline import run_leads_pipeline
+                            from pathlib import Path as _Path
+                            await run_leads_pipeline(
+                                session_data=session_data,
+                                session_json_path=_Path(file_path),
+                            )
+                        except Exception as e:
+                            logger.error(f"❌ Leads pipeline failed: {e}")
                 else:
                     logger.warning("ElevenLabs sync returned no data, falling back to local recorder")
                     await _save_local_session(session_recorder, session_id, tenant_id, customer_phone)

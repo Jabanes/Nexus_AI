@@ -6,6 +6,7 @@ This is provider-specific: only runs when the voice provider is ElevenLabs.
 Other providers use the built-in SessionRecorder for history.
 """
 
+import asyncio
 import logging
 import os
 from typing import Any, Dict, Optional
@@ -24,31 +25,71 @@ class ElevenLabsSync:
     def __init__(self):
         self.api_key = os.getenv("ELEVENLABS_API_KEY", "")
 
-    async def pull_conversation(self, conversation_id: str) -> Optional[Dict[str, Any]]:
+    async def pull_conversation(
+        self,
+        conversation_id: str,
+        wait_for_analysis: bool = True,
+        max_attempts: int = 8,
+        initial_delay: float = 2.0,
+    ) -> Optional[Dict[str, Any]]:
         """
         Pull full conversation data from ElevenLabs.
 
-        Args:
-            conversation_id: The ElevenLabs conversation ID
+        If wait_for_analysis is True, retries with backoff until the analysis
+        block is populated (evaluation_criteria + data_collection_results).
+        Analysis is computed asynchronously by ElevenLabs and typically takes
+        5–20 seconds after call end.
 
-        Returns:
-            The raw ElevenLabs conversation data, or None on failure
+        Returns the raw conversation dict, or None on failure.
         """
         if not self.api_key or not conversation_id:
             return None
 
         url = f"https://api.elevenlabs.io/v1/convai/conversations/{conversation_id}"
-        try:
-            resp = requests.get(url, headers={"xi-api-key": self.api_key}, timeout=10)
-            if resp.status_code == 200:
-                logger.info(f"[ElevenLabsSync] Pulled conversation {conversation_id}")
-                return resp.json()
-            else:
-                logger.warning(f"[ElevenLabsSync] Failed to pull {conversation_id}: {resp.status_code}")
-                return None
-        except Exception as e:
-            logger.error(f"[ElevenLabsSync] Error pulling conversation: {e}")
-            return None
+        delay = initial_delay
+        last_data: Optional[Dict[str, Any]] = None
+
+        for attempt in range(1, max_attempts + 1):
+            await asyncio.sleep(delay)
+            try:
+                resp = requests.get(url, headers={"xi-api-key": self.api_key}, timeout=10)
+                if resp.status_code != 200:
+                    logger.warning(f"[ElevenLabsSync] HTTP {resp.status_code} on attempt {attempt}")
+                    delay = min(delay * 1.5, 15.0)
+                    continue
+
+                data = resp.json()
+                last_data = data
+
+                if not wait_for_analysis:
+                    logger.info(f"[ElevenLabsSync] Pulled {conversation_id} (no-wait)")
+                    return data
+
+                # Analysis ready check — both fields must be non-None and non-empty
+                analysis = data.get("analysis") or {}
+                dc_results = analysis.get("data_collection_results") or {}
+                if dc_results:
+                    logger.info(
+                        f"[ElevenLabsSync] Pulled {conversation_id} with analysis ready (attempt {attempt})"
+                    )
+                    return data
+
+                logger.debug(
+                    f"[ElevenLabsSync] Analysis not ready yet for {conversation_id} (attempt {attempt})"
+                )
+                delay = min(delay * 1.5, 15.0)
+
+            except Exception as e:
+                logger.warning(f"[ElevenLabsSync] Pull error on attempt {attempt}: {e}")
+                delay = min(delay * 1.5, 15.0)
+
+        # Analysis never appeared — return what we have if we got anything
+        if last_data is not None:
+            logger.warning(
+                f"[ElevenLabsSync] Analysis never populated for {conversation_id} — returning partial"
+            )
+            return last_data
+        return None
 
     def convert_to_session(
         self,
@@ -61,14 +102,19 @@ class ElevenLabsSync:
         Convert ElevenLabs conversation data to our session history format.
 
         Preserves ALL data from ElevenLabs while fitting our schema.
+        Defensive against fields being present-but-None (the API sometimes
+        sets analysis/metadata to null while still in progress).
         """
-        metadata = el_data.get("metadata", {})
-        analysis = el_data.get("analysis", {})
-        el_transcript = el_data.get("transcript", [])
+        # `or {}` handles the present-but-None case that .get(key, {}) does NOT
+        metadata = el_data.get("metadata") or {}
+        analysis = el_data.get("analysis") or {}
+        el_transcript = el_data.get("transcript") or []
 
         # Convert transcript — include EVERYTHING
         transcript = []
         for entry in el_transcript:
+            if not entry:
+                continue
             role = entry.get("role", "unknown")
             message = entry.get("message") or ""
             tool_call = entry.get("tool_call")
@@ -109,6 +155,7 @@ class ElevenLabsSync:
         duration = metadata.get("call_duration_secs", 0)
         cost = metadata.get("cost", 0)
         termination = metadata.get("termination_reason", "")
+        charging = metadata.get("charging") or {}
 
         return {
             "session_id": session_id,
@@ -131,12 +178,12 @@ class ElevenLabsSync:
             "cost": {
                 "total_credits": cost,
                 "duration_seconds": duration,
-                "llm_usage": metadata.get("charging", {}).get("llm_usage", {}),
+                "llm_usage": charging.get("llm_usage") or {},
             },
             "summary": {
-                "call_successful": analysis.get("call_successful", "unknown"),
-                "transcript_summary": analysis.get("transcript_summary", ""),
-                "data_collection": analysis.get("data_collection_results", {}),
+                "call_successful": analysis.get("call_successful") or "unknown",
+                "transcript_summary": analysis.get("transcript_summary") or "",
+                "data_collection": analysis.get("data_collection_results") or {},
             },
             "transcript": transcript,
             # Preserve raw ElevenLabs data for anything we might need later
