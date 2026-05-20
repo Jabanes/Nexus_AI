@@ -21,6 +21,13 @@ button:disabled { opacity: 0.6; cursor: not-allowed; }
 .error { background: #3a1f24; border: 1px solid #5a2a30; color: #ff8b8b; padding: 10px 12px; border-radius: 6px; margin-top: 16px; font-size: 0.88rem; display: none; }
 .error.show { display: block; }
 .foot { margin-top: 20px; color: #8a8f9c; font-size: 0.78rem; text-align: center; }
+
+@media (max-width: 520px) {
+    .wrap { padding: 16px; align-items: flex-start; padding-top: 14vh; }
+    .card { padding: 24px 20px; }
+    input { font-size: 16px; }     /* 16px prevents iOS Safari zoom on focus */
+    button { padding: 13px; }
+}
 </style>
 </head>
 <body>

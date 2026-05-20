@@ -20,31 +20,42 @@ html, body { margin: 0; padding: 0; background: #0f1117; color: #e6e6ec; font-fa
     overflow: hidden;
 }
 
-.topbar { grid-column: 1 / -1; display: flex; justify-content: space-between; align-items: center; padding: 0 16px 0 8px; background: #16181f; border-bottom: 1px solid #232634; }
-.topbar .left { display: flex; align-items: center; gap: 6px; }    /* tight gap between hamburger and brand */
+.topbar { grid-column: 1 / -1; display: flex; justify-content: space-between; align-items: center; padding: 0 14px 0 8px; background: #16181f; border-bottom: 1px solid #232634; min-width: 0; }
+.topbar .left { display: flex; align-items: center; gap: 6px; min-width: 0; }    /* tight gap between hamburger and brand */
 
 .hamburger {
     display: inline-flex; align-items: center; justify-content: center;
-    width: 36px; height: 36px;
+    width: 40px; height: 40px;        /* touch-friendly 40×40 hit target */
     background: transparent; color: #e6e6ec;
     border: none; border-radius: 6px;
     cursor: pointer; font-size: 1.1rem; line-height: 1;
     transition: background .12s;
+    flex-shrink: 0;
 }
 .hamburger:hover { background: #232634; }
 .hamburger:focus { outline: 2px solid #5ac8fa; outline-offset: -2px; }
 
-.topbar .brand { font-size: 1rem; font-weight: 600; }
+.topbar .brand { font-size: 1rem; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .topbar .brand .accent { color: #5ac8fa; }
-.topbar .userbox { font-size: 0.85rem; color: #8a8f9c; text-align: right; }
+.topbar .userbox { font-size: 0.85rem; color: #8a8f9c; text-align: right; white-space: nowrap; flex-shrink: 0; }
 .topbar .userbox .name { color: #e6e6ec; font-weight: 600; }
 .topbar .userbox a { color: #8a8f9c; text-decoration: none; margin-left: 12px; }
 .topbar .userbox a:hover { color: #ff8b8b; }
+.topbar .userbox .role-text { margin-left: 6px; }
+
+/* Mobile-only backdrop, shown when the sidebar drawer is open on small screens. */
+.backdrop {
+    display: none;
+    position: fixed; inset: 56px 0 0 0;       /* below the topbar */
+    background: rgba(0,0,0,0.5);
+    z-index: 9;
+}
+.backdrop.visible { display: block; }
 
 .sidebar {
     background: #131520; border-right: 1px solid #232634; padding: 16px 12px;
     overflow-x: hidden; overflow-y: auto; min-width: 0;
-    transition: width .2s, padding .2s, border-right-width .2s;
+    transition: width .2s, padding .2s, border-right-width .2s, transform .2s;
 }
 .sidebar h2 { font-size: 0.72rem; font-weight: 600; color: #8a8f9c; text-transform: uppercase; letter-spacing: 0.08em; margin: 4px 8px 12px; }
 
@@ -95,7 +106,10 @@ html, body { margin: 0; padding: 0; background: #0f1117; color: #e6e6ec; font-fa
 .toolbar .live { display: flex; align-items: center; gap: 6px; color: #8a8f9c; font-size: 0.78rem; }
 .toolbar .live .dot { width: 8px; height: 8px; border-radius: 50%; background: #3ddc97; box-shadow: 0 0 8px #3ddc97; }
 
-table { width: 100%; border-collapse: collapse; background: #16181f; border: 1px solid #232634; border-radius: 8px; overflow: hidden; }
+/* Wrapper enables horizontal scroll on narrow viewports without breaking the layout. */
+.table-wrap { overflow-x: auto; border: 1px solid #232634; border-radius: 8px; background: #16181f; }
+.table-wrap table { border-radius: 0; border: none; }
+table { width: 100%; border-collapse: collapse; background: #16181f; border: 1px solid #232634; border-radius: 8px; overflow: hidden; min-width: 760px; }
 th, td { text-align: left; padding: 10px 12px; border-bottom: 1px solid #232634; vertical-align: top; font-size: 0.85rem; }
 th { background: #1a1d27; color: #8a8f9c; font-weight: 600; text-transform: uppercase; letter-spacing: 0.04em; font-size: 0.7rem; position: sticky; top: 0; }
 tr:hover td { background: #1a1d27; }
@@ -114,6 +128,52 @@ td.cost { color: #f5d068; }
 .placeholder h2 { color: #e6e6ec; margin: 0 0 8px 0; }
 .error { padding: 16px; background: #3a1f24; border: 1px solid #5a2a30; border-radius: 8px; color: #ff8b8b; }
 .footer { color: #8a8f9c; font-size: 0.78rem; margin-top: 12px; text-align: right; }
+
+/* ── Tablet (≤ 900px) ───────────────────────────────────────────── */
+@media (max-width: 900px) {
+    /* Sidebar becomes a slide-over drawer overlaying the main area. */
+    .app { grid-template-columns: minmax(0, 1fr); }                 /* main fills full width */
+    .app.sidebar-collapsed { grid-template-columns: minmax(0, 1fr); } /* same — drawer is positioned */
+    .sidebar {
+        position: fixed;
+        top: 56px; left: 0; bottom: 0;
+        width: 280px;
+        z-index: 10;
+        transform: translateX(0);
+        transition: transform .22s ease;
+    }
+    /* On mobile, "collapsed" means the drawer is offscreen. */
+    .app.sidebar-collapsed .sidebar {
+        width: 280px;          /* drawer keeps its real size */
+        min-width: 280px;
+        padding: 16px 12px;    /* and its padding */
+        border-right-width: 1px;
+        overflow-x: hidden; overflow-y: auto;
+        transform: translateX(-100%);   /* but is moved fully offscreen */
+    }
+    .main { padding: 18px 14px; }
+    .detail-header { flex-direction: column; align-items: flex-start; gap: 6px; }
+    .stats { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+    .toolbar { gap: 8px; }
+    .toolbar .right { width: 100%; justify-content: space-between; margin-left: 0; }
+    .topbar .userbox .role-text { display: none; }   /* save horizontal space */
+}
+
+/* ── Phone (≤ 520px) ────────────────────────────────────────────── */
+@media (max-width: 520px) {
+    .stats { grid-template-columns: 1fr 1fr; }
+    .stat .value { font-size: 1.3rem; }
+    .topbar { padding: 0 8px 0 4px; }
+    .topbar .userbox { font-size: 0.78rem; }
+    .topbar .userbox .name { max-width: 110px; overflow: hidden; text-overflow: ellipsis; display: inline-block; vertical-align: bottom; }
+    .main { padding: 14px 10px; }
+    .detail-header h1 { font-size: 1.15rem; }
+    .toolbar select, .toolbar input, .toolbar button { font-size: 0.85rem; padding: 8px 10px; }
+    .toolbar a.dl { padding: 7px 10px; font-size: 0.8rem; }
+    /* The drawer takes most of the screen on phones, leave a peek of the backdrop. */
+    .sidebar { width: min(280px, 86vw); }
+    .app.sidebar-collapsed .sidebar { width: min(280px, 86vw); min-width: min(280px, 86vw); }
+}
 </style>
 </head>
 <body>
@@ -132,10 +192,12 @@ td.cost { color: #f5d068; }
     </div>
     <div class="userbox">
         <span class="name" id="userName">…</span>
-        <span id="userRole" style="margin-left: 6px;"></span>
+        <span class="role-text" id="userRole"></span>
         <a href="#" id="logout">logout</a>
     </div>
 </header>
+
+<div class="backdrop" id="backdrop" aria-hidden="true"></div>
 
 <aside class="sidebar" id="sidebar">
     <h2>Businesses</h2>
@@ -210,21 +272,44 @@ document.getElementById('logout').addEventListener('click', async (e) => {
 });
 
 // ────────────────────────────────────────────────────────────────────
-// SIDEBAR TOGGLE (hamburger)
+// SIDEBAR TOGGLE (hamburger) — desktop in-flow / mobile drawer
 // ────────────────────────────────────────────────────────────────────
-const appEl = document.querySelector('.app');
+const appEl     = document.querySelector('.app');
 const hamburger = document.getElementById('hamburger');
+const backdrop  = document.getElementById('backdrop');
 
-// Restore persisted state
-if (localStorage.getItem('sidebar_collapsed') === '1') {
-    appEl.classList.add('sidebar-collapsed');
-    hamburger.setAttribute('aria-expanded', 'false');
+const isMobile = () => window.matchMedia('(max-width: 900px)').matches;
+
+function setSidebarCollapsed(collapsed) {
+    appEl.classList.toggle('sidebar-collapsed', collapsed);
+    hamburger.setAttribute('aria-expanded', collapsed ? 'false' : 'true');
+    // Backdrop only matters on mobile when the drawer is OPEN.
+    backdrop.classList.toggle('visible', !collapsed && isMobile());
+    // Persist desktop preference only; on mobile we always start closed.
+    if (!isMobile()) localStorage.setItem('sidebar_collapsed', collapsed ? '1' : '0');
+}
+
+// Initial state — mobile always starts collapsed; desktop honors persisted preference.
+if (isMobile()) {
+    setSidebarCollapsed(true);
+} else {
+    setSidebarCollapsed(localStorage.getItem('sidebar_collapsed') === '1');
 }
 
 hamburger.addEventListener('click', () => {
-    const nowCollapsed = appEl.classList.toggle('sidebar-collapsed');
-    hamburger.setAttribute('aria-expanded', nowCollapsed ? 'false' : 'true');
-    localStorage.setItem('sidebar_collapsed', nowCollapsed ? '1' : '0');
+    setSidebarCollapsed(!appEl.classList.contains('sidebar-collapsed'));
+});
+
+// Tap the dimmed backdrop to close the drawer on mobile.
+backdrop.addEventListener('click', () => setSidebarCollapsed(true));
+
+// If viewport crosses the 900px threshold, re-apply correct state.
+window.matchMedia('(max-width: 900px)').addEventListener('change', () => {
+    if (isMobile()) {
+        setSidebarCollapsed(true);
+    } else {
+        setSidebarCollapsed(localStorage.getItem('sidebar_collapsed') === '1');
+    }
 });
 
 // ────────────────────────────────────────────────────────────────────
@@ -320,6 +405,9 @@ function selectBusiness(tid, { pushHistory } = {}) {
     // Restart auto-refresh of just the calls list
     if (mainRefreshTimer) clearInterval(mainRefreshTimer);
     mainRefreshTimer = setInterval(fetchAndRenderCalls, 10000);
+
+    // On mobile, auto-close the drawer after the user picks a business.
+    if (isMobile()) setSidebarCollapsed(true);
 }
 
 function getBiz(tid) {
@@ -458,17 +546,19 @@ function renderCalls(calls) {
     }).join('');
 
     area.innerHTML = `
-        <table>
-            <thead>
-                <tr>
-                    <th>Started</th><th>Status</th><th>Name</th><th>Phone</th>
-                    <th>Address</th><th>Service</th><th>Intent</th><th>Summary</th>
-                    <th>Duration</th><th>Cost</th><th>Missing</th>
-                    <th>Transcript</th><th>Audio</th>
-                </tr>
-            </thead>
-            <tbody>${rows}</tbody>
-        </table>
+        <div class="table-wrap">
+            <table>
+                <thead>
+                    <tr>
+                        <th>Started</th><th>Status</th><th>Name</th><th>Phone</th>
+                        <th>Address</th><th>Service</th><th>Intent</th><th>Summary</th>
+                        <th>Duration</th><th>Cost</th><th>Missing</th>
+                        <th>Transcript</th><th>Audio</th>
+                    </tr>
+                </thead>
+                <tbody>${rows}</tbody>
+            </table>
+        </div>
     `;
     document.getElementById('footer').textContent = `${calls.length} call${calls.length === 1 ? '' : 's'} shown.`;
 }

@@ -228,6 +228,18 @@ class LeadsDB:
         async with self._lock:
             await asyncio.to_thread(_do)
 
+    async def delete_tenant(self, tenant_id: str) -> int:
+        """Delete a tenant and all its calls. Returns number of calls removed."""
+        def _do():
+            with sqlite3.connect(self.path) as conn:
+                cur = conn.execute("DELETE FROM calls WHERE tenant_id = ?", (tenant_id,))
+                calls_removed = cur.rowcount
+                conn.execute("DELETE FROM tenants WHERE tenant_id = ?", (tenant_id,))
+                conn.commit()
+                return calls_removed
+        async with self._lock:
+            return await asyncio.to_thread(_do)
+
     async def get_tenant(self, tenant_id: str) -> Optional[Dict[str, Any]]:
         def _do():
             with sqlite3.connect(self.path) as conn:
