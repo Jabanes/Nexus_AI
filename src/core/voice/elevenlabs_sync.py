@@ -16,6 +16,24 @@ import requests
 logger = logging.getLogger(__name__)
 
 
+def _prune_data_collection(dc: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    Strip noisy config-echo fields (json_schema, data_collection_id) from each
+    data_collection result so the consumed summary stays lean. The raw archive
+    in elevenlabs_raw.analysis preserves the original payload for forensics.
+    """
+    pruned: Dict[str, Any] = {}
+    for key, entry in (dc or {}).items():
+        if isinstance(entry, dict):
+            pruned[key] = {
+                "value": entry.get("value"),
+                "rationale": entry.get("rationale"),
+            }
+        else:
+            pruned[key] = entry
+    return pruned
+
+
 class ElevenLabsSync:
     """
     Pulls conversation data from the ElevenLabs API after a call ends.
@@ -183,7 +201,7 @@ class ElevenLabsSync:
             "summary": {
                 "call_successful": analysis.get("call_successful") or "unknown",
                 "transcript_summary": analysis.get("transcript_summary") or "",
-                "data_collection": analysis.get("data_collection_results") or {},
+                "data_collection": _prune_data_collection(analysis.get("data_collection_results") or {}),
             },
             "transcript": transcript,
             # Preserve raw ElevenLabs data for anything we might need later
