@@ -3,24 +3,49 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Calls — Nexus Voice</title>
+<title>Dashboard — Nexus Voice</title>
 <style>
 * { box-sizing: border-box; }
-html, body { margin: 0; padding: 0; background: #0f1117; color: #e6e6ec; font-family: -apple-system, "Segoe UI", system-ui, sans-serif; }
-.wrap { max-width: 1500px; margin: 0 auto; padding: 24px; }
+html, body { margin: 0; padding: 0; background: #0f1117; color: #e6e6ec; font-family: -apple-system, "Segoe UI", system-ui, sans-serif; height: 100%; }
 
-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 24px; border-bottom: 1px solid #232634; padding-bottom: 16px; }
-.crumb { font-size: 0.85rem; color: #8a8f9c; margin-bottom: 6px; }
-.crumb a { color: #5ac8fa; text-decoration: none; }
-.crumb a:hover { text-decoration: underline; }
-header h1 { margin: 0; font-size: 1.4rem; }
-header .tenant { color: #5ac8fa; font-weight: 600; }
-header .muted { color: #8a8f9c; font-size: 0.9rem; }
+/* ── Layout ─────────────────────────────────────────────────────── */
+.app { display: grid; grid-template-columns: 280px 1fr; grid-template-rows: 56px 1fr; min-height: 100vh; }
+.topbar { grid-column: 1 / -1; display: flex; justify-content: space-between; align-items: center; padding: 0 20px; background: #16181f; border-bottom: 1px solid #232634; }
+.topbar .brand { font-size: 1rem; font-weight: 600; }
+.topbar .brand .accent { color: #5ac8fa; }
+.topbar .userbox { font-size: 0.85rem; color: #8a8f9c; text-align: right; }
+.topbar .userbox .name { color: #e6e6ec; font-weight: 600; }
+.topbar .userbox a { color: #8a8f9c; text-decoration: none; margin-left: 12px; }
+.topbar .userbox a:hover { color: #ff8b8b; }
 
-.stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 12px; margin-bottom: 20px; }
-.stat { background: #16181f; border: 1px solid #232634; border-radius: 8px; padding: 14px 16px; }
-.stat .label { font-size: 0.72rem; text-transform: uppercase; letter-spacing: 0.06em; color: #8a8f9c; margin-bottom: 6px; }
-.stat .value { font-size: 1.5rem; font-weight: 700; line-height: 1.15; }
+.sidebar { background: #131520; border-right: 1px solid #232634; padding: 16px 12px; overflow-y: auto; }
+.sidebar h2 { font-size: 0.72rem; font-weight: 600; color: #8a8f9c; text-transform: uppercase; letter-spacing: 0.08em; margin: 4px 8px 12px; }
+
+.biz {
+    display: block; padding: 10px 12px; margin-bottom: 6px; background: transparent;
+    border-radius: 8px; border: 1px solid transparent; cursor: pointer; text-decoration: none; color: inherit;
+    transition: background .12s, border-color .12s;
+}
+.biz:hover { background: #1a1d27; }
+.biz.active { background: #1a1d27; border-color: #5ac8fa; }
+.biz .name { font-weight: 600; font-size: 0.92rem; }
+.biz .meta { font-size: 0.74rem; color: #8a8f9c; margin-top: 3px; display: flex; gap: 8px; }
+.biz .meta .pill { padding: 1px 6px; background: #232634; border-radius: 3px; }
+.biz.active .meta .pill { background: #2a2e3d; }
+.biz .meta .pill.lead { color: #3ddc97; }
+
+.main { padding: 24px; overflow-y: auto; }
+
+/* ── Main area widgets ──────────────────────────────────────────── */
+.detail-header { display: flex; justify-content: space-between; align-items: baseline; margin-bottom: 18px; }
+.detail-header h1 { margin: 0; font-size: 1.4rem; }
+.detail-header .agent { font-family: ui-monospace, Menlo, monospace; color: #8a8f9c; font-size: 0.78rem; margin-top: 4px; }
+.detail-header .muted { color: #8a8f9c; font-size: 0.85rem; }
+
+.stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 10px; margin-bottom: 18px; }
+.stat { background: #16181f; border: 1px solid #232634; border-radius: 8px; padding: 12px 14px; }
+.stat .label { font-size: 0.7rem; text-transform: uppercase; letter-spacing: 0.06em; color: #8a8f9c; margin-bottom: 4px; }
+.stat .value { font-size: 1.5rem; font-weight: 700; line-height: 1.1; }
 .stat .sub { font-size: 0.72rem; color: #8a8f9c; margin-top: 4px; }
 .stat.lead .value { color: #3ddc97; }
 .stat.spam .value { color: #ff6b6b; }
@@ -29,132 +54,117 @@ header .muted { color: #8a8f9c; font-size: 0.9rem; }
 .stat.cost .value { color: #f5d068; }
 
 .toolbar { display: flex; gap: 10px; margin-bottom: 14px; flex-wrap: wrap; align-items: center; }
+.toolbar label { color: #8a8f9c; font-size: 0.85rem; }
 .toolbar select, .toolbar input, .toolbar button {
     background: #16181f; color: #e6e6ec; border: 1px solid #2a2e3d;
-    padding: 8px 12px; border-radius: 6px; font-size: 0.9rem;
+    padding: 8px 12px; border-radius: 6px; font-size: 0.88rem;
 }
 .toolbar button { cursor: pointer; }
 .toolbar button.refresh { background: #5ac8fa; color: #001824; border: none; font-weight: 600; }
 .toolbar button.refresh:hover { background: #38b6ed; }
 .toolbar .right { margin-left: auto; display: flex; gap: 8px; align-items: center; }
-.toolbar a.dl { color: #5ac8fa; text-decoration: none; padding: 8px 12px; border: 1px solid #5ac8fa; border-radius: 6px; font-size: 0.85rem; }
+.toolbar a.dl { color: #5ac8fa; text-decoration: none; padding: 7px 12px; border: 1px solid #5ac8fa; border-radius: 6px; font-size: 0.82rem; }
 .toolbar a.dl:hover { background: rgba(90,200,250,0.1); }
-.toolbar .live { display: flex; align-items: center; gap: 6px; color: #8a8f9c; font-size: 0.8rem; }
+.toolbar .live { display: flex; align-items: center; gap: 6px; color: #8a8f9c; font-size: 0.78rem; }
 .toolbar .live .dot { width: 8px; height: 8px; border-radius: 50%; background: #3ddc97; box-shadow: 0 0 8px #3ddc97; }
 
 table { width: 100%; border-collapse: collapse; background: #16181f; border: 1px solid #232634; border-radius: 8px; overflow: hidden; }
-th, td { text-align: left; padding: 10px 12px; border-bottom: 1px solid #232634; vertical-align: top; font-size: 0.88rem; }
-th { background: #1a1d27; color: #8a8f9c; font-weight: 600; text-transform: uppercase; letter-spacing: 0.04em; font-size: 0.72rem; position: sticky; top: 0; }
+th, td { text-align: left; padding: 10px 12px; border-bottom: 1px solid #232634; vertical-align: top; font-size: 0.85rem; }
+th { background: #1a1d27; color: #8a8f9c; font-weight: 600; text-transform: uppercase; letter-spacing: 0.04em; font-size: 0.7rem; position: sticky; top: 0; }
 tr:hover td { background: #1a1d27; }
-td.summary { max-width: 340px; }
+td.summary { max-width: 320px; }
 td.classification { font-weight: 600; }
 td.classification.lead { color: #3ddc97; }
 td.classification.spam { color: #ff6b6b; }
 td.classification.irrelevant { color: #ff8b6b; }
 td.classification.needs_review { color: #ffb84d; }
-td a.btn { display: inline-block; padding: 4px 10px; background: #232634; color: #e6e6ec; border-radius: 4px; font-size: 0.78rem; text-decoration: none; }
+td a.btn { display: inline-block; padding: 3px 9px; background: #232634; color: #e6e6ec; border-radius: 4px; font-size: 0.76rem; text-decoration: none; }
 td a.btn:hover { background: #5ac8fa; color: #001824; }
-td.dur { font-family: ui-monospace, Menlo, monospace; }
-td.cost { font-family: ui-monospace, Menlo, monospace; color: #f5d068; }
+td.dur, td.cost { font-family: ui-monospace, Menlo, monospace; }
+td.cost { color: #f5d068; }
 
-.empty { padding: 60px 20px; text-align: center; color: #8a8f9c; }
-.error { padding: 20px; background: #3a1f24; border: 1px solid #5a2a30; border-radius: 8px; color: #ff8b8b; }
-.footer { color: #8a8f9c; font-size: 0.8rem; margin-top: 16px; text-align: right; }
+.empty, .placeholder { padding: 60px 20px; text-align: center; color: #8a8f9c; }
+.placeholder h2 { color: #e6e6ec; margin: 0 0 8px 0; }
+.error { padding: 16px; background: #3a1f24; border: 1px solid #5a2a30; border-radius: 8px; color: #ff8b8b; }
+.footer { color: #8a8f9c; font-size: 0.78rem; margin-top: 12px; text-align: right; }
 </style>
 </head>
 <body>
-<div class="wrap">
-<header>
-    <div>
-        <div class="crumb"><a href="/dashboard">← All businesses</a></div>
-        <h1>Calls — <span class="tenant" id="tenantName">…</span></h1>
-    </div>
-    <div style="text-align: right">
-        <span class="muted" id="lastUpdated">loading…</span>
-        <div style="margin-top: 6px; font-size: 0.8rem; color: #8a8f9c;">
-            <span id="userName">…</span> · <a href="#" id="logout" style="color:#8a8f9c">logout</a>
-        </div>
+<div class="app">
+
+<header class="topbar">
+    <div class="brand">Nexus <span class="accent">Voice</span></div>
+    <div class="userbox">
+        <span class="name" id="userName">…</span>
+        <span id="userRole" style="margin-left: 6px;"></span>
+        <a href="#" id="logout">logout</a>
     </div>
 </header>
 
-<div class="stats">
-    <div class="stat"><div class="label">Total Calls</div><div class="value" id="stat-total">—</div></div>
-    <div class="stat lead"><div class="label">Leads</div><div class="value" id="stat-leads">—</div></div>
-    <div class="stat spam"><div class="label">Spam</div><div class="value" id="stat-spam">—</div></div>
-    <div class="stat irrelevant"><div class="label">Irrelevant</div><div class="value" id="stat-irrelevant">—</div></div>
-    <div class="stat needs_review"><div class="label">Needs Review</div><div class="value" id="stat-needs_review">—</div></div>
-    <div class="stat cost">
-        <div class="label">Total Cost</div>
-        <div class="value" id="stat-cost-usd">—</div>
-        <div class="sub" id="stat-cost-credits">— credits</div>
+<aside class="sidebar">
+    <h2>Businesses</h2>
+    <div id="bizList">
+        <div style="padding: 14px; color: #8a8f9c; font-size: 0.85rem;">loading…</div>
     </div>
-</div>
+</aside>
 
-<div class="toolbar">
-    <label>Show:</label>
-    <select id="filter-classification">
-        <option value="lead" selected>Leads only</option>
-        <option value="">All calls</option>
-        <option value="spam">Spam only</option>
-        <option value="irrelevant">Irrelevant only</option>
-        <option value="needs_review">Needs Review only</option>
-    </select>
-    <button class="refresh" id="btn-refresh">Refresh</button>
-    <div class="right">
-        <a class="dl" id="link-xlsx" href="">⤓ XLSX</a>
-        <span class="live"><span class="dot"></span>auto-refresh 10s</span>
-    </div>
-</div>
+<main class="main" id="mainArea">
+    <div class="placeholder"><h2>Loading…</h2></div>
+</main>
 
-<div id="content"></div>
-<div class="footer" id="footer"></div>
 </div>
 
 <script>
-// tenant_id from URL: /dashboard/{tenant_id}
-const tenantId = window.location.pathname.split('/').filter(Boolean).pop() || '';
-document.getElementById('tenantName').textContent = tenantId;
-document.getElementById('link-xlsx').href = `/leads/${tenantId}/xlsx`;
+// ────────────────────────────────────────────────────────────────────
+// STATE
+// ────────────────────────────────────────────────────────────────────
+let businesses = [];
+let selectedTenantId = null;
+let mainRefreshTimer = null;
+let sidebarRefreshTimer = null;
+let currentFilter = 'lead';   // default to LEADS
 
-const $content = document.getElementById('content');
-const $lastUpdated = document.getElementById('lastUpdated');
-const $footer = document.getElementById('footer');
-const $filter = document.getElementById('filter-classification');
-const $btnRefresh = document.getElementById('btn-refresh');
-
-async function fetchAndRender() {
-    const classification = $filter.value;
-    const url = new URL(`/api/leads/${tenantId}/calls`, window.location.origin);
-    if (classification) url.searchParams.set('classification', classification);
-    try {
-        const resp = await fetch(url, { credentials: 'same-origin' });
-        if (resp.status === 401) {
-            window.location.href = '/login?next=' + encodeURIComponent(window.location.pathname);
-            return;
-        }
-        if (resp.status === 403) {
-            $content.innerHTML = `<div class="error">You do not have access to this business.</div>`;
-            return;
-        }
-        if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
-        const data = await resp.json();
-        render(data);
-        $lastUpdated.textContent = `updated ${new Date().toLocaleTimeString()}`;
-    } catch (e) {
-        $content.innerHTML = `<div class="error">Failed to load: ${e.message}</div>`;
-    }
+// ────────────────────────────────────────────────────────────────────
+// HELPERS
+// ────────────────────────────────────────────────────────────────────
+function escapeHtml(s) {
+    if (s == null) return '';
+    return String(s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+}
+function fmtDuration(seconds) {
+    if (seconds == null) return '';
+    const m = Math.floor(seconds / 60);
+    const s = Math.floor(seconds % 60);
+    return `${m}:${String(s).padStart(2,'0')}`;
+}
+function fmtDateTime(iso) {
+    if (!iso) return '';
+    try { return new Date(iso).toLocaleString(); } catch { return iso; }
+}
+function fmtMoney(n) {
+    return `$${Number(n || 0).toFixed(2)}`;
 }
 
+async function fetchJsonAuth(url, opts = {}) {
+    const resp = await fetch(url, { credentials: 'same-origin', ...opts });
+    if (resp.status === 401) {
+        window.location.href = '/login?next=' + encodeURIComponent(window.location.pathname);
+        throw new Error('redirecting to login');
+    }
+    return resp;
+}
+
+// ────────────────────────────────────────────────────────────────────
+// USER / AUTH
+// ────────────────────────────────────────────────────────────────────
 async function loadMe() {
     try {
-        const resp = await fetch('/api/auth/me', { credentials: 'same-origin' });
-        if (resp.status === 401) {
-            window.location.href = '/login?next=' + encodeURIComponent(window.location.pathname);
-            return;
-        }
-        const me = await resp.json();
-        document.getElementById('userName').textContent = me.name || me.email || 'logged in';
-    } catch (e) { /* ignored */ }
+        const r = await fetchJsonAuth('/api/auth/me');
+        if (!r.ok) return;
+        const me = await r.json();
+        document.getElementById('userName').textContent = me.name || me.email;
+        document.getElementById('userRole').textContent = me.role ? `· ${me.role}` : '';
+    } catch (e) { /* redirect already started */ }
 }
 
 document.getElementById('logout').addEventListener('click', async (e) => {
@@ -163,56 +173,217 @@ document.getElementById('logout').addEventListener('click', async (e) => {
     window.location.href = '/login';
 });
 
-loadMe();
+// ────────────────────────────────────────────────────────────────────
+// SIDEBAR (businesses list)
+// ────────────────────────────────────────────────────────────────────
+async function loadBusinesses(silent = false) {
+    try {
+        const r = await fetchJsonAuth('/api/businesses');
+        if (!r.ok) throw new Error(`HTTP ${r.status}`);
+        const data = await r.json();
+        businesses = data.businesses || [];
+        renderSidebar();
+
+        // Auto-select first business if URL is /dashboard (no tenant_id)
+        if (!silent) {
+            const urlTid = readTenantFromUrl();
+            if (urlTid && businesses.some(b => b.tenant_id === urlTid)) {
+                selectBusiness(urlTid, { pushHistory: false });
+            } else if (businesses.length > 0) {
+                selectBusiness(businesses[0].tenant_id, { pushHistory: true });
+            } else {
+                showEmptyState();
+            }
+        }
+    } catch (e) {
+        if (e.message === 'redirecting to login') return;
+        document.getElementById('bizList').innerHTML = `<div class="error">${e.message}</div>`;
+    }
+}
+
+function renderSidebar() {
+    const list = document.getElementById('bizList');
+    if (businesses.length === 0) {
+        list.innerHTML = `<div style="padding: 14px; color: #8a8f9c; font-size: 0.85rem;">No businesses assigned to you.</div>`;
+        return;
+    }
+    list.innerHTML = businesses.map(b => {
+        const isActive = b.tenant_id === selectedTenantId;
+        return `
+            <a class="biz ${isActive ? 'active' : ''}" data-tid="${escapeHtml(b.tenant_id)}" href="/dashboard/${encodeURIComponent(b.tenant_id)}">
+                <div class="name">${escapeHtml(b.name || b.tenant_id)}</div>
+                <div class="meta">
+                    <span class="pill">${b.total_calls || 0} calls</span>
+                    <span class="pill lead">${b.leads || 0} leads</span>
+                    <span class="pill">${fmtMoney(b.total_cost_usd)}</span>
+                </div>
+            </a>
+        `;
+    }).join('');
+
+    // Wire click handlers (intercept default link nav, use history.pushState for snappy UX)
+    list.querySelectorAll('.biz').forEach(el => {
+        el.addEventListener('click', (e) => {
+            e.preventDefault();
+            const tid = el.dataset.tid;
+            if (tid && tid !== selectedTenantId) selectBusiness(tid, { pushHistory: true });
+        });
+    });
+}
+
+function showEmptyState() {
+    const main = document.getElementById('mainArea');
+    main.innerHTML = `
+        <div class="placeholder">
+            <h2>No businesses yet</h2>
+            <p>An admin needs to assign at least one business to your account.<br>
+            Until then there's nothing to show here.</p>
+        </div>
+    `;
+}
+
+// ────────────────────────────────────────────────────────────────────
+// MAIN AREA (selected business detail)
+// ────────────────────────────────────────────────────────────────────
+function readTenantFromUrl() {
+    // /dashboard/{tenant_id} → tenant_id
+    // /dashboard            → null
+    const parts = window.location.pathname.split('/').filter(Boolean);
+    if (parts.length >= 2 && parts[0] === 'dashboard') return parts[1];
+    return null;
+}
+
+function selectBusiness(tid, { pushHistory } = {}) {
+    selectedTenantId = tid;
+    if (pushHistory) {
+        const url = `/dashboard/${encodeURIComponent(tid)}`;
+        if (window.location.pathname !== url) history.pushState({ tid }, '', url);
+    }
+    renderSidebar();             // refresh "active" highlight
+    renderMainShell();           // paint stats placeholders + toolbar
+    fetchAndRenderCalls();       // load real calls
+
+    // Restart auto-refresh of just the calls list
+    if (mainRefreshTimer) clearInterval(mainRefreshTimer);
+    mainRefreshTimer = setInterval(fetchAndRenderCalls, 10000);
+}
+
+function getBiz(tid) {
+    return businesses.find(b => b.tenant_id === tid);
+}
+
+function renderMainShell() {
+    const b = getBiz(selectedTenantId);
+    if (!b) {
+        document.getElementById('mainArea').innerHTML = `<div class="error">Business "${escapeHtml(selectedTenantId)}" not found or you don't own it.</div>`;
+        return;
+    }
+    document.getElementById('mainArea').innerHTML = `
+        <div class="detail-header">
+            <div>
+                <h1>${escapeHtml(b.name || b.tenant_id)}</h1>
+                <div class="agent">${escapeHtml(b.agent_id || '—')}</div>
+            </div>
+            <span class="muted" id="lastUpdated">loading…</span>
+        </div>
+
+        <div class="stats">
+            <div class="stat"><div class="label">Total Calls</div><div class="value" id="stat-total">—</div></div>
+            <div class="stat lead"><div class="label">Leads</div><div class="value" id="stat-leads">—</div></div>
+            <div class="stat spam"><div class="label">Spam</div><div class="value" id="stat-spam">—</div></div>
+            <div class="stat irrelevant"><div class="label">Irrelevant</div><div class="value" id="stat-irrelevant">—</div></div>
+            <div class="stat needs_review"><div class="label">Needs Review</div><div class="value" id="stat-needs_review">—</div></div>
+            <div class="stat cost">
+                <div class="label">Total Cost</div>
+                <div class="value" id="stat-cost-usd">—</div>
+                <div class="sub" id="stat-cost-credits">— credits</div>
+            </div>
+        </div>
+
+        <div class="toolbar">
+            <label>Show:</label>
+            <select id="filter-classification">
+                <option value="lead">Leads only</option>
+                <option value="">All calls</option>
+                <option value="spam">Spam only</option>
+                <option value="irrelevant">Irrelevant only</option>
+                <option value="needs_review">Needs Review only</option>
+            </select>
+            <button class="refresh" id="btn-refresh">Refresh</button>
+            <div class="right">
+                <a class="dl" id="link-xlsx" href="/leads/${encodeURIComponent(selectedTenantId)}/xlsx">⤓ XLSX</a>
+                <span class="live"><span class="dot"></span>auto-refresh 10s</span>
+            </div>
+        </div>
+
+        <div id="callsArea"><div class="placeholder">loading calls…</div></div>
+        <div class="footer" id="footer"></div>
+    `;
+
+    // Restore filter selection and wire handlers
+    const sel = document.getElementById('filter-classification');
+    sel.value = currentFilter;
+    sel.addEventListener('change', () => {
+        currentFilter = sel.value;
+        fetchAndRenderCalls();
+    });
+    document.getElementById('btn-refresh').addEventListener('click', fetchAndRenderCalls);
+}
+
+async function fetchAndRenderCalls() {
+    if (!selectedTenantId) return;
+    const url = new URL(`/api/leads/${encodeURIComponent(selectedTenantId)}/calls`, window.location.origin);
+    if (currentFilter) url.searchParams.set('classification', currentFilter);
+
+    let resp;
+    try {
+        resp = await fetchJsonAuth(url.toString());
+    } catch (e) {
+        return;  // 401 already redirected
+    }
+    if (resp.status === 403) {
+        document.getElementById('callsArea').innerHTML = `<div class="error">You do not have access to this business.</div>`;
+        return;
+    }
+    if (resp.status === 404) {
+        document.getElementById('callsArea').innerHTML = `<div class="error">Business not found.</div>`;
+        return;
+    }
+    if (!resp.ok) {
+        document.getElementById('callsArea').innerHTML = `<div class="error">Failed to load: HTTP ${resp.status}</div>`;
+        return;
+    }
+    const data = await resp.json();
+    renderStats(data.stats || {});
+    renderCalls(data.calls || []);
+    document.getElementById('lastUpdated').textContent = `updated ${new Date().toLocaleTimeString()}`;
+}
 
 function renderStats(stats) {
     const get = (k) => stats[k] != null ? stats[k] : 0;
-    document.getElementById('stat-total').textContent = get('total');
-    document.getElementById('stat-leads').textContent = get('leads');
-    document.getElementById('stat-spam').textContent = get('spam');
-    document.getElementById('stat-irrelevant').textContent = get('irrelevant');
-    document.getElementById('stat-needs_review').textContent = get('needs_review');
-    document.getElementById('stat-cost-usd').textContent = `$${(stats.total_cost_usd || 0).toFixed(2)}`;
-    document.getElementById('stat-cost-credits').textContent = `${(stats.total_cost || 0).toLocaleString()} credits`;
+    document.getElementById('stat-total').textContent          = get('total');
+    document.getElementById('stat-leads').textContent          = get('leads');
+    document.getElementById('stat-spam').textContent           = get('spam');
+    document.getElementById('stat-irrelevant').textContent     = get('irrelevant');
+    document.getElementById('stat-needs_review').textContent   = get('needs_review');
+    document.getElementById('stat-cost-usd').textContent       = fmtMoney(stats.total_cost_usd);
+    document.getElementById('stat-cost-credits').textContent   = `${(stats.total_cost || 0).toLocaleString()} credits`;
 }
 
-function fmtDuration(seconds) {
-    if (seconds == null) return '';
-    const m = Math.floor(seconds / 60);
-    const s = Math.floor(seconds % 60);
-    return `${m}:${String(s).padStart(2,'0')}`;
-}
-
-function fmtDateTime(iso) {
-    if (!iso) return '';
-    try {
-        const d = new Date(iso);
-        return d.toLocaleString();
-    } catch { return iso; }
-}
-
-function escapeHtml(s) {
-    if (s == null) return '';
-    return String(s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
-}
-
-function render(data) {
-    renderStats(data.stats || {});
-
-    const calls = data.calls || [];
+function renderCalls(calls) {
+    const area = document.getElementById('callsArea');
     if (calls.length === 0) {
-        const filterMsg = $filter.value ? ` (filter: ${$filter.value})` : '';
-        $content.innerHTML = `<div class="empty">No calls match this view${filterMsg}.</div>`;
-        $footer.textContent = '';
+        const filterMsg = currentFilter ? ` (filter: ${currentFilter})` : '';
+        area.innerHTML = `<div class="empty">No calls match this view${filterMsg}.</div>`;
+        document.getElementById('footer').textContent = '';
         return;
     }
 
+    const tid = selectedTenantId;
     const rows = calls.map(c => {
         const cls = c.classification || '';
-        const cost = c.cost_usd != null ? `$${c.cost_usd.toFixed(2)}` : '';
-        const dur = fmtDuration(c.duration_s);
-        const transcriptUrl = `/artifacts/${tenantId}/transcript/${c.call_id}`;
-        const audioUrl      = `/artifacts/${tenantId}/audio/${c.call_id}`;
+        const transcriptUrl = `/artifacts/${encodeURIComponent(tid)}/transcript/${encodeURIComponent(c.call_id)}`;
+        const audioUrl      = `/artifacts/${encodeURIComponent(tid)}/audio/${encodeURIComponent(c.call_id)}`;
         return `
         <tr>
             <td>${fmtDateTime(c.call_started_at)}</td>
@@ -223,45 +394,51 @@ function render(data) {
             <td>${escapeHtml(c.service_requested) || '<em style="color:#666">—</em>'}</td>
             <td>${escapeHtml(c.intent) || ''}</td>
             <td class="summary">${escapeHtml(c.summary) || ''}</td>
-            <td class="dur">${dur}</td>
-            <td class="cost">${cost}</td>
+            <td class="dur">${fmtDuration(c.duration_s)}</td>
+            <td class="cost">${fmtMoney(c.cost_usd)}</td>
             <td>${c.missing_fields ? `<span style="color:#ffb84d">${escapeHtml(c.missing_fields)}</span>` : ''}</td>
             <td>${c.transcript_html_path ? `<a class="btn" href="${transcriptUrl}" target="_blank">view</a>` : ''}</td>
             <td>${c.audio_mp3_path     ? `<a class="btn" href="${audioUrl}"      target="_blank">play</a>` : ''}</td>
         </tr>
-    `;
+        `;
     }).join('');
 
-    $content.innerHTML = `
+    area.innerHTML = `
         <table>
             <thead>
                 <tr>
-                    <th>Started</th>
-                    <th>Status</th>
-                    <th>Name</th>
-                    <th>Phone</th>
-                    <th>Address</th>
-                    <th>Service</th>
-                    <th>Intent</th>
-                    <th>Summary</th>
-                    <th>Duration</th>
-                    <th>Cost</th>
-                    <th>Missing</th>
-                    <th>Transcript</th>
-                    <th>Audio</th>
+                    <th>Started</th><th>Status</th><th>Name</th><th>Phone</th>
+                    <th>Address</th><th>Service</th><th>Intent</th><th>Summary</th>
+                    <th>Duration</th><th>Cost</th><th>Missing</th>
+                    <th>Transcript</th><th>Audio</th>
                 </tr>
             </thead>
             <tbody>${rows}</tbody>
         </table>
     `;
-    $footer.textContent = `${calls.length} call${calls.length === 1 ? '' : 's'} shown.`;
+    document.getElementById('footer').textContent = `${calls.length} call${calls.length === 1 ? '' : 's'} shown.`;
 }
 
-$btnRefresh.addEventListener('click', fetchAndRender);
-$filter.addEventListener('change', fetchAndRender);
+// ────────────────────────────────────────────────────────────────────
+// BROWSER NAVIGATION (back/forward)
+// ────────────────────────────────────────────────────────────────────
+window.addEventListener('popstate', () => {
+    const tid = readTenantFromUrl();
+    if (tid && businesses.some(b => b.tenant_id === tid)) {
+        selectBusiness(tid, { pushHistory: false });
+    } else if (businesses.length > 0) {
+        selectBusiness(businesses[0].tenant_id, { pushHistory: false });
+    }
+});
 
-fetchAndRender();
-setInterval(fetchAndRender, 10000);
+// ────────────────────────────────────────────────────────────────────
+// BOOT
+// ────────────────────────────────────────────────────────────────────
+loadMe();
+loadBusinesses();
+
+// Refresh the sidebar (business counts) every 30s
+sidebarRefreshTimer = setInterval(() => loadBusinesses(true), 30000);
 </script>
 </body>
 </html>

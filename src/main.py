@@ -166,16 +166,18 @@ async def api_list_businesses(user=Depends(get_current_user)):
 
 
 @app.get("/dashboard")
-async def dashboard_home():
-    """Top-level dashboard: list of businesses. Auth gating happens client-side
-    via /api/auth/me (page redirects to /login on 401)."""
-    return FileResponse("static/dashboard_home.html")
-
-
 @app.get("/dashboard/{tenant_id}")
-async def dashboard(tenant_id: str):
-    """Business detail dashboard shell. RLS enforced by /api/leads/.../calls call."""
-    logger.debug(f"Dashboard request for tenant={tenant_id}")
+async def dashboard(tenant_id: Optional[str] = None):
+    """
+    Unified SPA shell. Sidebar lists businesses the current user owns;
+    main area shows the selected business's calls. The tenant_id in the
+    URL (when present) preselects which business to load.
+
+    Auth + RLS enforced by /api/auth/me + /api/leads/{t}/calls — the page
+    redirects to /login on 401, and shows "access denied" on 403.
+    """
+    if tenant_id:
+        logger.debug(f"Dashboard request for tenant={tenant_id}")
     return FileResponse("static/dashboard.html")
 
 
