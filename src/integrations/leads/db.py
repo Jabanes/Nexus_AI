@@ -206,6 +206,47 @@ class LeadsDB:
                 return [dict(r) for r in rows]
         return await asyncio.to_thread(_do)
 
+    async def list_tenants_with_stats(self) -> List[Dict[str, Any]]:
+        """
+        One row per business, joined with aggregate call stats.
+        Used by the businesses list view ("home" dashboard).
+        """
+        def _do():
+            with sqlite3.connect(self.path) as conn:
+                conn.row_factory = sqlite3.Row
+                rows = conn.execute(
+                    """
+                    SELECT
+                        t.*,
+                        COALESCE(c.total, 0)            AS total_calls,
+                        COALESCE(c.leads, 0)            AS leads,
+                        COALESCE(c.spam, 0)             AS spam,
+                        COALESCE(c.irrelevant, 0)       AS irrelevant,
+                        COALESCE(c.needs_review, 0)     AS needs_review,
+                        COALESCE(c.total_cost, 0)       AS total_cost,
+                        COALESCE(c.total_duration_s, 0) AS total_duration_s,
+                        c.last_call_at                  AS last_call_at
+                    FROM tenants t
+                    LEFT JOIN (
+                        SELECT
+                            tenant_id,
+                            COUNT(*)                                                         AS total,
+                            SUM(CASE WHEN classification = 'lead'         THEN 1 ELSE 0 END) AS leads,
+                            SUM(CASE WHEN classification = 'spam'         THEN 1 ELSE 0 END) AS spam,
+                            SUM(CASE WHEN classification = 'irrelevant'   THEN 1 ELSE 0 END) AS irrelevant,
+                            SUM(CASE WHEN classification = 'needs_review' THEN 1 ELSE 0 END) AS needs_review,
+                            COALESCE(SUM(cost_credits), 0)                                   AS total_cost,
+                            COALESCE(SUM(duration_s),   0)                                   AS total_duration_s,
+                            MAX(call_started_at)                                             AS last_call_at
+                        FROM calls
+                        GROUP BY tenant_id
+                    ) c ON c.tenant_id = t.tenant_id
+                    ORDER BY t.tenant_id
+                    """
+                ).fetchall()
+                return [dict(r) for r in rows]
+        return await asyncio.to_thread(_do)
+
     # ── Calls ──────────────────────────────────────────────────────
     async def insert_call(self, record: CallRecord) -> None:
         """Insert one call row. Idempotent on call_id (replaces existing)."""

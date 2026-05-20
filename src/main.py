@@ -72,20 +72,107 @@ async def api_list_calls(
 ):
     """JSON list of calls for a tenant (dashboard data source)."""
     from src.integrations.leads.db import get_db
+    from src.integrations.leads.cost import credits_to_usd, credits_per_usd
     db = get_db()
     calls = await db.list_calls(tenant_id, classification=classification, since=since, limit=limit, offset=offset)
+    # Enrich each call with USD cost
+    for c in calls:
+        c["cost_usd"] = credits_to_usd(c.get("cost_credits"))
     stats = await db.stats(tenant_id)
-    return {"tenant_id": tenant_id, "stats": stats, "count": len(calls), "calls": calls}
+    stats["total_cost_usd"] = credits_to_usd(stats.get("total_cost"))
+    return {
+        "tenant_id": tenant_id,
+        "stats": stats,
+        "count": len(calls),
+        "calls": calls,
+        "credits_per_usd": credits_per_usd(),
+    }
+
+
+@app.get("/api/businesses")
+async def api_list_businesses():
+    """
+    List all businesses with aggregate stats. Used by the home dashboard.
+    Will be filtered by owner_user_id once the auth layer lands.
+    """
+    from src.integrations.leads.db import get_db
+    from src.integrations.leads.cost import credits_to_usd
+    db = get_db()
+    rows = await db.list_tenants_with_stats()
+    for r in rows:
+        r["total_cost_usd"] = credits_to_usd(r.get("total_cost"))
+    return {"businesses": rows}
+
+
+@app.get("/dashboard")
+async def dashboard_home():
+    """Top-level dashboard: list of businesses owned by the (eventual) user."""
+    return FileResponse("static/dashboard_home.html")
 
 
 @app.get("/dashboard/{tenant_id}")
 async def dashboard(tenant_id: str):
     """
-    Dashboard shell for a tenant. The HTML is static; the page reads tenant_id
-    from window.location.pathname on the client and calls /api/leads/{tenant_id}/calls.
+    Business detail dashboard. The HTML is static; the page reads tenant_id
+    from window.location.pathname and calls /api/leads/{tenant_id}/calls.
     """
     logger.debug(f"Dashboard request for tenant={tenant_id}")
     return FileResponse("static/dashboard.html")
+
+
+# ── Artifact serving (transcript HTML, MP3 audio, session JSON) ──────
+# Look up the call by ID, return the file referenced in the DB row.
+# All three live under /artifacts/{tenant_id}/{kind}/{call_id}.
+
+@app.get("/artifacts/{tenant_id}/{kind}/{call_id}")
+async def serve_artifact(tenant_id: str, kind: str, call_id: str):
+    """
+    Serve a per-call artifact (transcript HTML, MP3 audio, or session JSON).
+
+    The DB stores absolute paths, but those can be host-side (Windows) while
+    we run in a Linux container. So we resolve by convention against the
+    CWD-relative data tree and fall back to the DB-stored absolute path.
+    """
+    from fastapi import HTTPException
+    from pathlib import Path as _Path
+    from src.integrations.leads.db import get_db
+
+    if kind not in ("transcript", "audio", "json"):
+        raise HTTPException(status_code=404, detail="unknown artifact kind")
+
+    db = get_db()
+    call = await db.get_call(call_id)
+    if not call or call.get("tenant_id") != tenant_id:
+        raise HTTPException(status_code=404, detail="call not found for this tenant")
+
+    media_type = {
+        "transcript": "text/html",
+        "audio":      "audio/mpeg",
+        "json":       "application/json",
+    }[kind]
+
+    # 1. Convention path — works regardless of host/container path differences
+    conventional = {
+        "transcript": _Path(f"data/leads/{tenant_id}/transcripts/{call_id}.html"),
+        "audio":      _Path(f"data/leads/{tenant_id}/audio/{call_id}.mp3"),
+        "json":       _Path(f"data/history/{tenant_id}/{call_id}.json"),
+    }[kind]
+
+    if conventional.exists():
+        return FileResponse(conventional, media_type=media_type)
+
+    # 2. Fallback — try the absolute path stored in the DB (legacy / host-paths)
+    stored = call.get({
+        "transcript": "transcript_html_path",
+        "audio":      "audio_mp3_path",
+        "json":       "session_json_path",
+    }[kind])
+    if stored:
+        p = _Path(stored)
+        if p.exists():
+            return FileResponse(p, media_type=media_type)
+
+    raise HTTPException(status_code=404, detail=f"{kind} file not found for this call")
 
 
 # Initialize the conversation manager (singleton)
