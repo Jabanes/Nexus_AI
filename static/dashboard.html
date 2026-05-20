@@ -9,9 +9,16 @@
 html, body { margin: 0; padding: 0; background: #0f1117; color: #e6e6ec; font-family: -apple-system, "Segoe UI", system-ui, sans-serif; height: 100%; }
 
 /* ── Layout ─────────────────────────────────────────────────────── */
-.app { display: grid; grid-template-columns: 280px 1fr; grid-template-rows: 56px 1fr; min-height: 100vh; transition: grid-template-columns .2s; }
-.app.sidebar-collapsed { grid-template-columns: 0 1fr; }
-.app.sidebar-collapsed .sidebar { display: none; }
+.app { display: grid; grid-template-columns: 280px minmax(0, 1fr); grid-template-rows: 56px 1fr; min-height: 100vh; transition: grid-template-columns .2s; }
+.app.sidebar-collapsed { grid-template-columns: 0px minmax(0, 1fr); }
+/* Fully collapse: zero width, zero padding, zero border, no overflow visible. */
+.app.sidebar-collapsed .sidebar {
+    width: 0;
+    min-width: 0;
+    padding: 0;
+    border-right-width: 0;
+    overflow: hidden;
+}
 
 .topbar { grid-column: 1 / -1; display: flex; justify-content: space-between; align-items: center; padding: 0 16px 0 8px; background: #16181f; border-bottom: 1px solid #232634; }
 .topbar .left { display: flex; align-items: center; gap: 6px; }    /* tight gap between hamburger and brand */
@@ -34,7 +41,11 @@ html, body { margin: 0; padding: 0; background: #0f1117; color: #e6e6ec; font-fa
 .topbar .userbox a { color: #8a8f9c; text-decoration: none; margin-left: 12px; }
 .topbar .userbox a:hover { color: #ff8b8b; }
 
-.sidebar { background: #131520; border-right: 1px solid #232634; padding: 16px 12px; overflow-y: auto; }
+.sidebar {
+    background: #131520; border-right: 1px solid #232634; padding: 16px 12px;
+    overflow-x: hidden; overflow-y: auto; min-width: 0;
+    transition: width .2s, padding .2s, border-right-width .2s;
+}
 .sidebar h2 { font-size: 0.72rem; font-weight: 600; color: #8a8f9c; text-transform: uppercase; letter-spacing: 0.08em; margin: 4px 8px 12px; }
 
 .biz {
