@@ -1,25 +1,22 @@
-"""Per-tenant XLSX leads ledger.
+"""XLSX export view (read-only, generated on demand from the DB).
 
-Single workbook per tenant at data/leads/{tenant}/leads.xlsx.
-Two sheets:
+The primary store of structured call data is now the SQLite DB in
+src/integrations/leads/db.py. This module exists solely to materialize the
+DB's contents as a downloadable workbook with two sheets:
   • "Calls"       — end-client view. Business-relevant fields only.
   • "Diagnostics" — internal/dev view. Identifiers, cost, raw paths.
 
-Both sheets gain one row per call, in lockstep, keyed on session_id.
-
-Concurrent calls are serialized by an asyncio.Lock per tenant.
-
-When we migrate to a real DB this module is the single replacement point —
-main.py only calls append_lead().
+The pipeline no longer calls this module on every call — it now writes
+directly to the DB. Only the GET /leads/{tenant_id}/xlsx endpoint invokes
+this module, building a fresh xlsx from the current DB state each time.
 """
 
 import asyncio
 import logging
-from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
-from openpyxl import Workbook, load_workbook
+from openpyxl import Workbook
 from openpyxl.styles import Font, PatternFill
 from openpyxl.worksheet.worksheet import Worksheet
 
@@ -64,15 +61,6 @@ _DIAG_COLUMNS: List[Tuple[str, str, int]] = [
 _DIAG_HYPERLINK_COLS = (10,)  # session_json
 
 
-_locks: Dict[str, asyncio.Lock] = {}
-
-
-def _lock_for(tenant_id: str) -> asyncio.Lock:
-    if tenant_id not in _locks:
-        _locks[tenant_id] = asyncio.Lock()
-    return _locks[tenant_id]
-
-
 def _style_header_row(ws: Worksheet, columns: List[Tuple[str, str, int]]) -> None:
     """Write header row, style it, set column widths."""
     ws.append([label for (label, _key, _w) in columns])
@@ -86,39 +74,95 @@ def _style_header_row(ws: Worksheet, columns: List[Tuple[str, str, int]]) -> Non
     ws.freeze_panes = "A2"
 
 
-def _ensure_workbook(path: Path) -> Workbook:
-    if path.exists():
-        return load_workbook(path)
+def _row_from_db_call(c: Dict[str, Any]) -> Dict[str, Any]:
+    """Convert a DB row dict into the flat key/value dict the writers expect."""
+    # Reconstruct call_date / call_time (Eastern) from call_started_at ISO
+    call_date = ""
+    call_time = ""
+    started = c.get("call_started_at") or ""
+    if started:
+        try:
+            from datetime import datetime
+            dt = datetime.fromisoformat(started.replace("Z", "+00:00"))
+            try:
+                from zoneinfo import ZoneInfo
+                dt_local = dt.astimezone(ZoneInfo("America/New_York"))
+            except Exception:
+                dt_local = dt
+            call_date = dt_local.strftime("%Y-%m-%d")
+            call_time = dt_local.strftime("%H:%M")
+        except Exception:
+            pass
+    return {
+        "call_date": call_date,
+        "call_time": call_time,
+        "call_started_at": c.get("call_started_at") or "",
+        "call_ended_at": c.get("call_ended_at") or "",
+        "duration_s": c.get("duration_s"),
+        "classification": c.get("classification") or "",
+        "customer_name": c.get("customer_name") or "",
+        "phone_e164": c.get("phone_e164") or "",
+        "address": c.get("address") or "",
+        "service_requested": c.get("service_requested") or "",
+        "intent": c.get("intent") or "",
+        "summary": c.get("summary") or "",
+        "missing_fields": c.get("missing_fields") or "",
+        "termination_reason": c.get("termination_reason") or "",
+        "cost_credits": c.get("cost_credits"),
+        "session_id": c.get("call_id") or "",
+        "conversation_id": c.get("conversation_id") or "",
+        "agent_id": c.get("agent_id") or "",
+        "voice_provider": c.get("voice_provider") or "",
+        "tenant_id": c.get("tenant_id") or "",
+        "transcript_html": c.get("transcript_html_path") or "",
+        "audio_mp3": c.get("audio_mp3_path") or "",
+        "session_json": c.get("session_json_path") or "",
+        "row_written_at": c.get("row_written_at") or "",
+    }
+
+
+async def build_xlsx_from_db(tenant_id: str, dest_path: Path) -> Path:
+    """Generate a fresh xlsx for a tenant from the current DB state."""
+    from src.integrations.leads.db import get_db
+    db = get_db()
+    calls = await db.list_calls(tenant_id, limit=10_000)
+    dest_path.parent.mkdir(parents=True, exist_ok=True)
+
+    def _do():
+        wb = _build_workbook()
+        # DB returns newest-first; reverse to oldest-first so the sheet reads chronologically
+        for call in reversed(calls):
+            _append_row_to_workbook(wb, _row_from_db_call(call))
+        tmp = dest_path.with_suffix(".xlsx.tmp")
+        wb.save(tmp)
+        tmp.replace(dest_path)
+
+    await asyncio.to_thread(_do)
+    logger.info(f"[xlsx-export] {tenant_id}: {len(calls)} rows → {dest_path}")
+    return dest_path
+
+
+def _build_workbook() -> Workbook:
+    """Build a fresh empty workbook with both sheets and styled headers."""
     wb = Workbook()
-    # Default sheet → "Calls"
     ws_calls = wb.active
     ws_calls.title = "Calls"
     _style_header_row(ws_calls, _CALLS_COLUMNS)
-    # Second sheet → "Diagnostics"
     ws_diag = wb.create_sheet("Diagnostics")
     _style_header_row(ws_diag, _DIAG_COLUMNS)
     return wb
 
 
-async def append_lead(
-    tenant_id: str,
-    row: Dict[str, Any],
-    leads_root: Path = Path("data/leads"),
-) -> Path:
-    """
-    Append one call to BOTH sheets of the tenant's workbook.
-    Creates the workbook on first use.
-    """
-    tenant_dir = leads_root / tenant_id
-    tenant_dir.mkdir(parents=True, exist_ok=True)
-    xlsx_path = tenant_dir / "leads.xlsx"
-
-    async with _lock_for(tenant_id):
-        # openpyxl is sync — run in default executor to keep the event loop free
-        await asyncio.to_thread(_write_row, xlsx_path, row)
-
-    logger.info(f"[leads] {tenant_id}: appended {row.get('session_id', '?')} → {xlsx_path}")
-    return xlsx_path
+def _append_row_to_workbook(wb: Workbook, row: Dict[str, Any]) -> None:
+    _append_row_to_sheet(
+        wb["Calls"], _CALLS_COLUMNS, row,
+        hyperlink_cols=_CALLS_HYPERLINK_COLS,
+        classification_col=_CALLS_CLASSIFICATION_COL,
+    )
+    _append_row_to_sheet(
+        wb["Diagnostics"], _DIAG_COLUMNS, row,
+        hyperlink_cols=_DIAG_HYPERLINK_COLS,
+    )
 
 
 def _coerce(value: Any) -> Any:
@@ -161,32 +205,3 @@ def _append_row_to_sheet(
             cell.font = Font(color="0563C1", underline="single")
 
 
-def _write_row(xlsx_path: Path, row: Dict[str, Any]) -> None:
-    wb = _ensure_workbook(xlsx_path)
-
-    if "row_written_at" not in row or not row["row_written_at"]:
-        row["row_written_at"] = datetime.now().isoformat(timespec="seconds")
-
-    # Sheet 1: Calls
-    ws_calls = wb["Calls"]
-    _append_row_to_sheet(
-        ws_calls,
-        _CALLS_COLUMNS,
-        row,
-        hyperlink_cols=_CALLS_HYPERLINK_COLS,
-        classification_col=_CALLS_CLASSIFICATION_COL,
-    )
-
-    # Sheet 2: Diagnostics
-    ws_diag = wb["Diagnostics"]
-    _append_row_to_sheet(
-        ws_diag,
-        _DIAG_COLUMNS,
-        row,
-        hyperlink_cols=_DIAG_HYPERLINK_COLS,
-    )
-
-    # Atomic-ish save
-    tmp = xlsx_path.with_suffix(".xlsx.tmp")
-    wb.save(tmp)
-    tmp.replace(xlsx_path)

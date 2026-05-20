@@ -49,20 +49,55 @@ async def test_ui():
 
 @app.get("/leads/{tenant_id}/xlsx")
 async def download_leads_xlsx(tenant_id: str):
-    """Download the per-tenant leads ledger as XLSX."""
+    """Generate and download the per-tenant leads ledger as XLSX (export view from DB)."""
     from pathlib import Path as _Path
-    path = _Path(f"data/leads/{tenant_id}/leads.xlsx")
-    if not path.exists():
-        from fastapi import HTTPException
-        raise HTTPException(status_code=404, detail=f"No leads file yet for tenant '{tenant_id}'")
+    from src.integrations.leads.xlsx_repository import build_xlsx_from_db
+
+    export_path = _Path(f"data/leads/{tenant_id}/leads.xlsx")
+    await build_xlsx_from_db(tenant_id, export_path)
     return FileResponse(
-        path,
+        export_path,
         filename=f"{tenant_id}_leads.xlsx",
         media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
     )
 
+
+@app.get("/api/leads/{tenant_id}/calls")
+async def api_list_calls(
+    tenant_id: str,
+    classification: Optional[str] = None,
+    since: Optional[str] = None,
+    limit: int = 200,
+    offset: int = 0,
+):
+    """JSON list of calls for a tenant (dashboard data source)."""
+    from src.integrations.leads.db import get_db
+    db = get_db()
+    calls = await db.list_calls(tenant_id, classification=classification, since=since, limit=limit, offset=offset)
+    stats = await db.stats(tenant_id)
+    return {"tenant_id": tenant_id, "stats": stats, "count": len(calls), "calls": calls}
+
+
+@app.get("/dashboard/{tenant_id}")
+async def dashboard(tenant_id: str):
+    """
+    Dashboard shell for a tenant. The HTML is static; the page reads tenant_id
+    from window.location.pathname on the client and calls /api/leads/{tenant_id}/calls.
+    """
+    logger.debug(f"Dashboard request for tenant={tenant_id}")
+    return FileResponse("static/dashboard.html")
+
+
 # Initialize the conversation manager (singleton)
 conversation_manager = ConversationManager()
+
+
+# ── DB startup hook ─────────────────────────────────────────────────
+@app.on_event("startup")
+async def _init_leads_db():
+    from src.integrations.leads.db import get_db
+    await get_db().init_schema()
+    logger.info("LeadsDB schema initialized")
 
 # --- Middleware ---
 @app.middleware("http")

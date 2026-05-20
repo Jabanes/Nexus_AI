@@ -19,9 +19,9 @@ except Exception:
     _EASTERN = None  # type: ignore
 
 from src.integrations.leads.audio_fetcher import download_recording
+from src.integrations.leads.db import CallRecord, get_db
 from src.integrations.leads.phone_utils import normalize_phone
 from src.integrations.leads.transcript_html import render_transcript_html
-from src.integrations.leads.xlsx_repository import append_lead
 
 logger = logging.getLogger(__name__)
 
@@ -156,45 +156,53 @@ async def run_leads_pipeline(
             name=f"audio_dl_{session_id}",
         )
 
-    # ── 6. Append XLSX row (every call, classification marks the kind) ─
+    # ── 6. Insert into the DB (single source of truth) ──────────────
     times = _format_times(meta)
     termination = meta.get("termination_reason", "") or ""
     voice_provider = meta.get("voice_provider", "") or ""
     agent_id = (meta.get("elevenlabs_agent_id") or
                 __import__("os").environ.get("ELEVENLABS_AGENT_ID", ""))
 
-    row = {
-        # When
-        **times,
-        "duration_s": duration,
-        # Who / why
-        "classification": classification,
-        "customer_name": name,
-        "phone_e164": phone_e164,
-        "address": address,
-        "service_requested": service,
-        "intent": intent,
-        "summary": summary_text,
-        # Status
-        "missing_fields": missing_fields_str,
-        "termination_reason": termination,
-        # Cost
-        "cost_credits": cost,
-        # Cross-refs
-        "session_id": session_id,
-        "conversation_id": conversation_id,
-        "agent_id": agent_id,
-        "voice_provider": voice_provider,
-        "tenant_id": tenant_id,
-        # Artifacts
-        "transcript_html": html_path.resolve() if html_path else None,
-        "audio_mp3": mp3_path.resolve(),
-        "session_json": session_json_path.resolve() if session_json_path else None,
-        # Bookkeeping
-        "row_written_at": datetime.now().isoformat(timespec="seconds"),
-    }
-    await append_lead(tenant_id, row, leads_root=leads_root)
-    logger.info(f"[leads] {tenant_id}:{session_id} classified={classification} missing={missing_fields_str or 'none'}")
+    db = get_db()
+    # Make sure the tenant exists in `tenants` (idempotent upsert)
+    await db.upsert_tenant(
+        tenant_id=tenant_id,
+        name=tenant_id.replace("_", " ").title(),
+        agent_id=agent_id,
+        voice_provider=voice_provider,
+    )
+
+    record = CallRecord(
+        call_id=session_id,
+        tenant_id=tenant_id,
+        classification=classification,
+        conversation_id=conversation_id or None,
+        agent_id=agent_id or None,
+        voice_provider=voice_provider or None,
+        call_started_at=times.get("call_started_at") or None,
+        call_ended_at=times.get("call_ended_at") or None,
+        duration_s=int(duration) if duration is not None else None,
+        is_spam=is_spam,
+        customer_name=name or None,
+        customer_phone=raw_phone or None,
+        phone_e164=phone_e164 or None,
+        address=address or None,
+        service_requested=service or None,
+        intent=intent or None,
+        summary=summary_text or None,
+        missing_fields=missing_fields_str or None,
+        termination_reason=termination or None,
+        cost_credits=int(cost) if cost is not None else None,
+        transcript_html_path=str(html_path.resolve()) if html_path else None,
+        audio_mp3_path=str(mp3_path.resolve()),
+        session_json_path=str(session_json_path.resolve()) if session_json_path else None,
+        data_collection=dc or None,
+    )
+    await db.insert_call(record)
+    logger.info(
+        f"[leads] {tenant_id}:{session_id} → DB classified={classification} "
+        f"missing={missing_fields_str or 'none'}"
+    )
 
 
 async def _safe_download(conversation_id: str, dest_path: Path) -> None:

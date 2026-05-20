@@ -1,0 +1,204 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Calls Dashboard</title>
+<style>
+* { box-sizing: border-box; }
+html, body { margin: 0; padding: 0; background: #0f1117; color: #e6e6ec; font-family: -apple-system, "Segoe UI", system-ui, sans-serif; }
+.wrap { max-width: 1400px; margin: 0 auto; padding: 24px; }
+header { display: flex; justify-content: space-between; align-items: baseline; margin-bottom: 24px; border-bottom: 1px solid #232634; padding-bottom: 16px; }
+header h1 { margin: 0; font-size: 1.4rem; }
+header .tenant { color: #5ac8fa; font-weight: 600; }
+header .muted { color: #8a8f9c; font-size: 0.9rem; }
+
+.stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 12px; margin-bottom: 20px; }
+.stat { background: #16181f; border: 1px solid #232634; border-radius: 8px; padding: 14px 16px; }
+.stat .label { font-size: 0.75rem; text-transform: uppercase; letter-spacing: 0.06em; color: #8a8f9c; margin-bottom: 6px; }
+.stat .value { font-size: 1.5rem; font-weight: 700; }
+.stat.lead .value { color: #3ddc97; }
+.stat.spam .value { color: #ff6b6b; }
+.stat.needs_review .value { color: #ffb84d; }
+.stat.irrelevant .value { color: #ff6b6b; }
+
+.toolbar { display: flex; gap: 10px; margin-bottom: 14px; flex-wrap: wrap; align-items: center; }
+.toolbar select, .toolbar input, .toolbar button {
+    background: #16181f; color: #e6e6ec; border: 1px solid #2a2e3d;
+    padding: 8px 12px; border-radius: 6px; font-size: 0.9rem;
+}
+.toolbar button { cursor: pointer; }
+.toolbar button.refresh { background: #5ac8fa; color: #001824; border: none; font-weight: 600; }
+.toolbar button.refresh:hover { background: #38b6ed; }
+.toolbar .live { display: flex; align-items: center; gap: 6px; color: #8a8f9c; font-size: 0.85rem; }
+.toolbar .live .dot { width: 8px; height: 8px; border-radius: 50%; background: #3ddc97; box-shadow: 0 0 8px #3ddc97; }
+
+table { width: 100%; border-collapse: collapse; background: #16181f; border: 1px solid #232634; border-radius: 8px; overflow: hidden; }
+th, td { text-align: left; padding: 10px 12px; border-bottom: 1px solid #232634; vertical-align: top; font-size: 0.88rem; }
+th { background: #1a1d27; color: #8a8f9c; font-weight: 600; text-transform: uppercase; letter-spacing: 0.04em; font-size: 0.75rem; position: sticky; top: 0; }
+tr:hover td { background: #1a1d27; }
+td.summary { max-width: 320px; }
+td.classification { font-weight: 600; }
+td.classification.lead { color: #3ddc97; }
+td.classification.spam { color: #ff6b6b; }
+td.classification.irrelevant { color: #ff8b6b; }
+td.classification.needs_review { color: #ffb84d; }
+td a { color: #5ac8fa; text-decoration: none; }
+td a:hover { text-decoration: underline; }
+
+.empty { padding: 60px 20px; text-align: center; color: #8a8f9c; }
+.error { padding: 20px; background: #3a1f24; border: 1px solid #5a2a30; border-radius: 8px; color: #ff8b8b; }
+.footer { color: #8a8f9c; font-size: 0.8rem; margin-top: 16px; text-align: right; }
+</style>
+</head>
+<body>
+<div class="wrap">
+<header>
+    <h1>Calls Dashboard — <span class="tenant" id="tenantName">…</span></h1>
+    <span class="muted" id="lastUpdated">loading…</span>
+</header>
+
+<div class="stats" id="stats">
+    <div class="stat"><div class="label">Total Calls</div><div class="value" id="stat-total">—</div></div>
+    <div class="stat lead"><div class="label">Leads</div><div class="value" id="stat-leads">—</div></div>
+    <div class="stat spam"><div class="label">Spam</div><div class="value" id="stat-spam">—</div></div>
+    <div class="stat irrelevant"><div class="label">Irrelevant</div><div class="value" id="stat-irrelevant">—</div></div>
+    <div class="stat needs_review"><div class="label">Needs Review</div><div class="value" id="stat-needs_review">—</div></div>
+    <div class="stat"><div class="label">Total Cost (credits)</div><div class="value" id="stat-cost">—</div></div>
+</div>
+
+<div class="toolbar">
+    <label>Filter:</label>
+    <select id="filter-classification">
+        <option value="">All</option>
+        <option value="lead">Leads only</option>
+        <option value="spam">Spam only</option>
+        <option value="irrelevant">Irrelevant only</option>
+        <option value="needs_review">Needs Review only</option>
+    </select>
+    <button class="refresh" id="btn-refresh">Refresh</button>
+    <a href="" id="link-xlsx" style="margin-left: auto; color: #5ac8fa; text-decoration: none; padding: 8px 12px; border: 1px solid #5ac8fa; border-radius: 6px;">⤓ Download XLSX</a>
+    <span class="live"><span class="dot"></span>auto-refresh: 10s</span>
+</div>
+
+<div id="content"></div>
+<div class="footer" id="footer"></div>
+</div>
+
+<script>
+// Parse tenant_id from URL: /dashboard/{tenant_id}
+const tenantId = window.location.pathname.split('/').filter(Boolean).pop() || '';
+document.getElementById('tenantName').textContent = tenantId;
+document.getElementById('link-xlsx').href = `/leads/${tenantId}/xlsx`;
+
+const $content = document.getElementById('content');
+const $lastUpdated = document.getElementById('lastUpdated');
+const $footer = document.getElementById('footer');
+const $filter = document.getElementById('filter-classification');
+const $btnRefresh = document.getElementById('btn-refresh');
+
+let refreshTimer = null;
+
+async function fetchAndRender() {
+    const classification = $filter.value;
+    const url = new URL(`/api/leads/${tenantId}/calls`, window.location.origin);
+    if (classification) url.searchParams.set('classification', classification);
+    try {
+        const resp = await fetch(url);
+        if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+        const data = await resp.json();
+        render(data);
+        $lastUpdated.textContent = `updated ${new Date().toLocaleTimeString()}`;
+    } catch (e) {
+        $content.innerHTML = `<div class="error">Failed to load: ${e.message}</div>`;
+    }
+}
+
+function renderStats(stats) {
+    const get = (k) => stats[k] != null ? stats[k] : 0;
+    document.getElementById('stat-total').textContent = get('total');
+    document.getElementById('stat-leads').textContent = get('leads');
+    document.getElementById('stat-spam').textContent = get('spam');
+    document.getElementById('stat-irrelevant').textContent = get('irrelevant');
+    document.getElementById('stat-needs_review').textContent = get('needs_review');
+    document.getElementById('stat-cost').textContent = get('total_cost');
+}
+
+function fmtPath(p) {
+    if (!p) return '';
+    return p.split(/[\\\/]/).pop();
+}
+
+function fmtDateTime(iso) {
+    if (!iso) return '';
+    try {
+        const d = new Date(iso);
+        return d.toLocaleString();
+    } catch { return iso; }
+}
+
+function render(data) {
+    renderStats(data.stats || {});
+
+    const calls = data.calls || [];
+    if (calls.length === 0) {
+        $content.innerHTML = `<div class="empty">No calls yet for <code>${tenantId}</code>. Make a test call from <a href="/test" style="color: #5ac8fa;">/test</a>.</div>`;
+        $footer.textContent = '';
+        return;
+    }
+
+    const rows = calls.map(c => `
+        <tr>
+            <td>${fmtDateTime(c.call_started_at) || ''}</td>
+            <td class="classification ${c.classification || ''}">${c.classification || ''}</td>
+            <td>${escapeHtml(c.customer_name) || '<em style="color:#666">—</em>'}</td>
+            <td>${escapeHtml(c.phone_e164) || '<em style="color:#666">—</em>'}</td>
+            <td>${escapeHtml(c.address) || '<em style="color:#666">—</em>'}</td>
+            <td>${escapeHtml(c.service_requested) || '<em style="color:#666">—</em>'}</td>
+            <td>${escapeHtml(c.intent) || ''}</td>
+            <td class="summary">${escapeHtml(c.summary) || ''}</td>
+            <td>${c.duration_s || ''}</td>
+            <td>${c.missing_fields ? `<span style="color:#ffb84d">${escapeHtml(c.missing_fields)}</span>` : ''}</td>
+            <td>${c.transcript_html_path ? `<a href="file:///${c.transcript_html_path.replace(/\\\\/g,'/')}" target="_blank">transcript</a>` : ''}</td>
+            <td>${c.audio_mp3_path ? `<a href="file:///${c.audio_mp3_path.replace(/\\\\/g,'/')}" target="_blank">audio</a>` : ''}</td>
+        </tr>
+    `).join('');
+
+    $content.innerHTML = `
+        <table>
+            <thead>
+                <tr>
+                    <th>Started</th>
+                    <th>Status</th>
+                    <th>Name</th>
+                    <th>Phone</th>
+                    <th>Address</th>
+                    <th>Service</th>
+                    <th>Intent</th>
+                    <th>Summary</th>
+                    <th>Dur (s)</th>
+                    <th>Missing</th>
+                    <th>Transcript</th>
+                    <th>Audio</th>
+                </tr>
+            </thead>
+            <tbody>${rows}</tbody>
+        </table>
+    `;
+    $footer.textContent = `${calls.length} call${calls.length === 1 ? '' : 's'} shown.`;
+}
+
+function escapeHtml(s) {
+    if (s == null) return '';
+    return String(s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+}
+
+$btnRefresh.addEventListener('click', fetchAndRender);
+$filter.addEventListener('change', fetchAndRender);
+
+// Initial load + auto-refresh every 10s
+fetchAndRender();
+refreshTimer = setInterval(fetchAndRender, 10000);
+</script>
+</body>
+</html>
