@@ -733,6 +733,46 @@ async def call_endpoint(websocket: WebSocket, tenant_id: str, customer_phone: Op
             "message": "Audio bridge initializing..."
         })
         
+        # ── PRE-FLIGHT: ElevenLabs credit guard ──────────────────────
+        # ElevenLabs hard-cuts the audio stream mid-frame when its quota is
+        # exhausted, which produces glitchy partial audio + abrupt hangups.
+        # We refuse to start the call here when remaining credits are below a
+        # safety threshold so the caller gets a clear error instead of a broken
+        # call experience. Bypass by setting EL_CREDIT_GUARD_DISABLE=1.
+        if not os.getenv("EL_CREDIT_GUARD_DISABLE"):
+            try:
+                import urllib.request as _urlreq
+                _req = _urlreq.Request(
+                    "https://api.elevenlabs.io/v1/user/subscription",
+                    headers={"xi-api-key": os.getenv("ELEVENLABS_API_KEY", "")},
+                )
+                with _urlreq.urlopen(_req, timeout=5) as _r:
+                    _sub = json.loads(_r.read())
+                _used = _sub.get("character_count", 0)
+                _limit = _sub.get("character_limit", 0)
+                _remaining = max(0, _limit - _used)
+                _threshold = int(os.getenv("EL_CREDIT_MIN", "1000"))
+                if _remaining < _threshold:
+                    logger.warning(
+                        f"⛔ Refusing call: only {_remaining}/{_limit} ElevenLabs credits "
+                        f"remaining (threshold={_threshold})"
+                    )
+                    await websocket.send_json({
+                        "type": "error",
+                        "code": "credits_too_low",
+                        "message": (
+                            f"Cannot start call: only {_remaining} ElevenLabs credits remaining "
+                            f"(need at least {_threshold}). The agent would be cut off mid-sentence. "
+                            "Upgrade your plan or wait for the monthly reset."
+                        ),
+                        "remaining_credits": _remaining,
+                        "limit_credits": _limit,
+                    })
+                    await websocket.close(code=1011, reason="Insufficient ElevenLabs credits")
+                    return
+            except Exception as e:
+                logger.warning(f"Credit guard failed (allowing call): {e}")
+
         # Load tenant configuration
         try:
             tenant_context = TenantLoader.load_tenant(tenant_id)
