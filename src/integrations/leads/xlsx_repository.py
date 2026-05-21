@@ -29,6 +29,7 @@ _CALLS_COLUMNS: List[Tuple[str, str, int]] = [
     ("Date",            "call_date",         12),
     ("Time",            "call_time",          8),
     ("Status",          "classification",    14),
+    ("Ended By",        "ended_by",          11),
     ("Customer Name",   "customer_name",     22),
     ("Phone",           "phone_e164",        16),
     ("Address",         "address",           38),
@@ -41,7 +42,7 @@ _CALLS_COLUMNS: List[Tuple[str, str, int]] = [
     ("Recording",       "audio_mp3",         40),
 ]
 _CALLS_CLASSIFICATION_COL = 3   # 1-indexed column number for classification
-_CALLS_HYPERLINK_COLS = (12, 13)  # transcript_html, audio_mp3
+_CALLS_HYPERLINK_COLS = (13, 14)  # transcript_html, audio_mp3 (shifted by ended_by column)
 
 
 # ── Sheet 2: Diagnostics (internal / dev) ──────────────────────────────
@@ -100,6 +101,7 @@ def _row_from_db_call(c: Dict[str, Any]) -> Dict[str, Any]:
         "call_ended_at": c.get("call_ended_at") or "",
         "duration_s": c.get("duration_s"),
         "classification": c.get("classification") or "",
+        "ended_by": c.get("ended_by") or "",
         "customer_name": c.get("customer_name") or "",
         "phone_e164": c.get("phone_e164") or "",
         "address": c.get("address") or "",

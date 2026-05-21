@@ -124,6 +124,16 @@ td a.btn:hover { background: #5ac8fa; color: #001824; }
 td.dur, td.cost { font-family: ui-monospace, Menlo, monospace; }
 td.cost { color: #f5d068; }
 
+/* Ended-by badge — small colored pill */
+.ended {
+    display: inline-block; padding: 2px 8px; border-radius: 10px;
+    font-size: 0.72rem; font-weight: 600; text-transform: capitalize;
+}
+.ended.agent   { background: #1c3a2a; color: #3ddc97; }
+.ended.client  { background: #3a2d1a; color: #ffb84d; }
+.ended.system  { background: #3a1f24; color: #ff8b6b; }
+.ended.unknown { background: #232634; color: #8a8f9c; }
+
 .empty, .placeholder { padding: 60px 20px; text-align: center; color: #8a8f9c; }
 .placeholder h2 { color: #e6e6ec; margin: 0 0 8px 0; }
 .error { padding: 16px; background: #3a1f24; border: 1px solid #5a2a30; border-radius: 8px; color: #ff8b8b; }
@@ -524,12 +534,14 @@ function renderCalls(calls) {
     const tid = selectedTenantId;
     const rows = calls.map(c => {
         const cls = c.classification || '';
+        const endedBy = c.ended_by || 'unknown';
         const transcriptUrl = `/artifacts/${encodeURIComponent(tid)}/transcript/${encodeURIComponent(c.call_id)}`;
         const audioUrl      = `/artifacts/${encodeURIComponent(tid)}/audio/${encodeURIComponent(c.call_id)}`;
         return `
         <tr>
             <td>${fmtDateTime(c.call_started_at)}</td>
             <td class="classification ${cls}">${cls}</td>
+            <td><span class="ended ${endedBy}" title="${escapeHtml(c.termination_reason || '')}">${endedBy}</span></td>
             <td>${escapeHtml(c.customer_name) || '<em style="color:#666">—</em>'}</td>
             <td>${escapeHtml(c.phone_e164) || '<em style="color:#666">—</em>'}</td>
             <td>${escapeHtml(c.address) || '<em style="color:#666">—</em>'}</td>
@@ -550,7 +562,7 @@ function renderCalls(calls) {
             <table>
                 <thead>
                     <tr>
-                        <th>Started</th><th>Status</th><th>Name</th><th>Phone</th>
+                        <th>Started</th><th>Status</th><th>Ended By</th><th>Name</th><th>Phone</th>
                         <th>Address</th><th>Service</th><th>Intent</th><th>Summary</th>
                         <th>Duration</th><th>Cost</th><th>Missing</th>
                         <th>Transcript</th><th>Audio</th>

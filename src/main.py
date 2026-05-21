@@ -849,9 +849,14 @@ async def call_endpoint(websocket: WebSocket, tenant_id: str, customer_phone: Op
                         try:
                             from src.integrations.leads.pipeline import run_leads_pipeline
                             from pathlib import Path as _Path
+                            # Tell the pipeline what we observed locally so it can derive
+                            # `ended_by=client` even before ElevenLabs's analysis populates.
+                            local_status = (getattr(session_recorder, "status", None)
+                                            if session_recorder else None)
                             await run_leads_pipeline(
                                 session_data=session_data,
                                 session_json_path=_Path(file_path),
+                                local_status=local_status,
                             )
                         except Exception as e:
                             logger.error(f"❌ Leads pipeline failed: {e}")

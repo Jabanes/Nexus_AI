@@ -28,6 +28,42 @@ logger = logging.getLogger(__name__)
 _TRUTHY = {"true", "yes", "spam", "1"}
 
 
+def _derive_ended_by(termination_reason: str, local_status: Optional[str] = None) -> str:
+    """
+    Derive who/what ended the call. Returns one of:
+      'agent'   — agent intentionally invoked end_call tool
+      'client'  — caller hung up (their WebSocket dropped, ElevenLabs reports user disconnect)
+      'system'  — timeout / max-duration / error
+      'unknown' — no signal either way
+
+    ElevenLabs's `termination_reason` is authoritative when present. The local
+    recorder's status (DISCONNECTED / ERROR) is a fallback hint when ElevenLabs's
+    analysis hasn't populated the reason yet.
+    """
+    reason = (termination_reason or "").lower()
+
+    if any(k in reason for k in ("end_call", "end call", "agent_ended", "agent ended")):
+        return "agent"
+    if any(k in reason for k in ("user_disconnect", "client_disconnect", "user_hangup",
+                                 "caller_hangup", "user disconnect", "client disconnect",
+                                 "user_left", "caller_left", "user hangup", "hangup")):
+        return "client"
+    if any(k in reason for k in ("timeout", "max_duration", "max duration", "maximum duration",
+                                 "silence", "error", "quota", "exceeded", "exceeds", "rate_limit",
+                                 "rate limit")):
+        return "system"
+
+    # Fallback to our own tracking of the WebSocket lifecycle
+    if local_status == "DISCONNECTED":
+        return "client"
+    if local_status == "ERROR":
+        return "system"
+    if local_status == "COMPLETED":
+        return "agent"
+
+    return "unknown"
+
+
 def _coerce_bool(val: Any) -> Optional[bool]:
     if val is None:
         return None
@@ -88,6 +124,7 @@ async def run_leads_pipeline(
     session_data: Dict[str, Any],
     session_json_path: Path,
     leads_root: Path = Path("data/leads"),
+    local_status: Optional[str] = None,
 ) -> None:
     """
     Classify, save transcript HTML, fire async audio fetch, append XLSX row.
@@ -159,6 +196,7 @@ async def run_leads_pipeline(
     # ── 6. Insert into the DB (single source of truth) ──────────────
     times = _format_times(meta)
     termination = meta.get("termination_reason", "") or ""
+    ended_by = _derive_ended_by(termination, local_status)
     voice_provider = meta.get("voice_provider", "") or ""
     agent_id = (meta.get("elevenlabs_agent_id") or
                 __import__("os").environ.get("ELEVENLABS_AGENT_ID", ""))
@@ -192,6 +230,7 @@ async def run_leads_pipeline(
         summary=summary_text or None,
         missing_fields=missing_fields_str or None,
         termination_reason=termination or None,
+        ended_by=ended_by,
         cost_credits=int(cost) if cost is not None else None,
         transcript_html_path=str(html_path.resolve()) if html_path else None,
         audio_mp3_path=str(mp3_path.resolve()),

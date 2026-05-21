@@ -90,7 +90,8 @@ CREATE TABLE IF NOT EXISTS calls (
 
     -- quality / status
     missing_fields       TEXT,                          -- comma list
-    termination_reason   TEXT,
+    termination_reason   TEXT,                          -- raw value from ElevenLabs metadata
+    ended_by             TEXT,                          -- derived: agent | client | system | unknown
 
     -- cost
     cost_credits         INTEGER,
@@ -143,6 +144,7 @@ class CallRecord:
 
     missing_fields: Optional[str] = None
     termination_reason: Optional[str] = None
+    ended_by: Optional[str] = None                  # agent | client | system | unknown
     cost_credits: Optional[int] = None
 
     transcript_html_path: Optional[str] = None
@@ -164,6 +166,11 @@ class LeadsDB:
     def init_schema_sync(self) -> None:
         with sqlite3.connect(self.path) as conn:
             conn.executescript(_SCHEMA_SQL)
+            # Lightweight migrations: add columns that newer code expects.
+            existing_cols = {r[1] for r in conn.execute("PRAGMA table_info(calls)").fetchall()}
+            if "ended_by" not in existing_cols:
+                conn.execute("ALTER TABLE calls ADD COLUMN ended_by TEXT")
+                logger.info("[LeadsDB] migration: added calls.ended_by column")
             conn.commit()
         logger.info(f"[LeadsDB] schema ready at {self.path}")
 
@@ -346,7 +353,7 @@ class LeadsDB:
                         classification, is_spam,
                         customer_name, customer_phone, phone_e164,
                         address, service_requested, intent, summary,
-                        missing_fields, termination_reason, cost_credits,
+                        missing_fields, termination_reason, ended_by, cost_credits,
                         transcript_html_path, audio_mp3_path, session_json_path,
                         data_collection_json
                     ) VALUES (
@@ -355,7 +362,7 @@ class LeadsDB:
                         ?, ?,
                         ?, ?, ?,
                         ?, ?, ?, ?,
-                        ?, ?, ?,
+                        ?, ?, ?, ?,
                         ?, ?, ?,
                         ?
                     )
@@ -368,7 +375,7 @@ class LeadsDB:
                         None if record.is_spam is None else int(bool(record.is_spam)),
                         record.customer_name, record.customer_phone, record.phone_e164,
                         record.address, record.service_requested, record.intent, record.summary,
-                        record.missing_fields, record.termination_reason, record.cost_credits,
+                        record.missing_fields, record.termination_reason, record.ended_by, record.cost_credits,
                         record.transcript_html_path, record.audio_mp3_path, record.session_json_path,
                         json.dumps(record.data_collection, ensure_ascii=False) if record.data_collection else None,
                     ),
