@@ -37,7 +37,21 @@ html, body { margin: 0; padding: 0; background: #0f1117; color: #e6e6ec; font-fa
 
 .topbar .brand { font-size: 1rem; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .topbar .brand .accent { color: #5ac8fa; }
-.topbar .userbox { font-size: 0.85rem; color: #8a8f9c; text-align: right; white-space: nowrap; flex-shrink: 0; }
+.credits-chip {
+    display: inline-flex; align-items: center; gap: 6px;
+    padding: 4px 10px; margin-right: 14px;
+    background: #1a1d27; border: 1px solid #2a2e3d; border-radius: 12px;
+    font-size: 0.78rem; color: #8a8f9c;
+}
+.credits-chip .bar { width: 60px; height: 6px; background: #2a2e3d; border-radius: 3px; overflow: hidden; }
+.credits-chip .fill { height: 100%; background: #3ddc97; transition: width .3s; }
+.credits-chip.warn  .fill { background: #ffb84d; }
+.credits-chip.warn  { border-color: #5a432a; color: #ffb84d; }
+.credits-chip.crit  .fill { background: #ff6b6b; }
+.credits-chip.crit  { border-color: #5a2a30; color: #ff8b8b; }
+.credits-chip .num  { font-family: ui-monospace, Menlo, monospace; }
+
+.topbar .userbox { font-size: 0.85rem; color: #8a8f9c; text-align: right; white-space: nowrap; flex-shrink: 0; display: flex; align-items: center; }
 .topbar .userbox .name { color: #e6e6ec; font-weight: 600; }
 .topbar .userbox a { color: #8a8f9c; text-decoration: none; margin-left: 12px; }
 .topbar .userbox a:hover { color: #ff8b8b; }
@@ -201,6 +215,9 @@ td.cost { color: #f5d068; }
         <div class="brand">Nexus <span class="accent">Voice</span></div>
     </div>
     <div class="userbox">
+        <span class="credits-chip" id="creditsChip" title="ElevenLabs credits">
+            <span>EL</span><span class="bar"><span class="fill" id="creditsFill" style="width:0"></span></span><span class="num" id="creditsNum">—</span>
+        </span>
         <span class="name" id="userName">…</span>
         <span class="role-text" id="userRole"></span>
         <a href="#" id="logout">logout</a>
@@ -590,11 +607,31 @@ window.addEventListener('popstate', () => {
 // ────────────────────────────────────────────────────────────────────
 // BOOT
 // ────────────────────────────────────────────────────────────────────
+async function loadCredits() {
+    try {
+        const r = await fetch('/api/elevenlabs/credits', { credentials: 'same-origin' });
+        if (!r.ok) return;
+        const d = await r.json();
+        if (!d.available) return;
+        const chip = document.getElementById('creditsChip');
+        const fill = document.getElementById('creditsFill');
+        const num  = document.getElementById('creditsNum');
+        fill.style.width = `${Math.min(100, d.percent_used)}%`;
+        num.textContent  = `${d.remaining_credits.toLocaleString()} / ${d.limit_credits.toLocaleString()}`;
+        chip.classList.remove('warn', 'crit');
+        if (d.percent_used >= 90)      chip.classList.add('crit');
+        else if (d.percent_used >= 75) chip.classList.add('warn');
+        chip.title = `ElevenLabs ${d.tier} — ${d.percent_used}% used, resets at ${new Date(d.next_reset_unix * 1000).toLocaleDateString()}`;
+    } catch (e) { /* silent */ }
+}
+
 loadMe();
+loadCredits();
 loadBusinesses();
 
-// Refresh the sidebar (business counts) every 30s
+// Refresh sidebar (business counts) every 30s; credits every 60s
 sidebarRefreshTimer = setInterval(() => loadBusinesses(true), 30000);
+setInterval(loadCredits, 60000);
 </script>
 </body>
 </html>

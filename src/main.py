@@ -3,6 +3,8 @@ load_dotenv()  # MUST BE AT THE ABSOLUTE TOP
 
 import logging
 import os
+import json
+
 from fastapi import Depends, FastAPI, HTTPException, Request, WebSocket, WebSocketDisconnect
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
@@ -147,6 +149,47 @@ async def api_list_calls(
         "calls": calls,
         "credits_per_usd": credits_per_usd(),
     }
+
+
+@app.get("/api/elevenlabs/credits")
+async def api_elevenlabs_credits(user=Depends(get_current_user)):
+    """
+    Surface ElevenLabs subscription state so the dashboard can warn before a
+    quota exhaust hard-cuts a call. Cached briefly to avoid hammering the API.
+    """
+    import time
+    import urllib.request
+    cache = getattr(api_elevenlabs_credits, "_cache", None)
+    if cache and (time.time() - cache["at"] < 60):
+        return cache["data"]
+
+    api_key = os.getenv("ELEVENLABS_API_KEY", "")
+    if not api_key:
+        return {"available": False, "reason": "ELEVENLABS_API_KEY not set"}
+
+    try:
+        req = urllib.request.Request(
+            "https://api.elevenlabs.io/v1/user/subscription",
+            headers={"xi-api-key": api_key},
+        )
+        with urllib.request.urlopen(req, timeout=8) as r:
+            d = json.loads(r.read())
+    except Exception as e:
+        return {"available": False, "reason": str(e)[:200]}
+
+    used = d.get("character_count", 0)
+    limit = d.get("character_limit", 0)
+    out = {
+        "available": True,
+        "tier": d.get("tier"),
+        "used_credits": used,
+        "limit_credits": limit,
+        "remaining_credits": max(0, limit - used),
+        "percent_used": round((used / limit) * 100, 1) if limit else 0,
+        "next_reset_unix": d.get("next_character_count_reset_unix"),
+    }
+    api_elevenlabs_credits._cache = {"at": time.time(), "data": out}  # type: ignore[attr-defined]
+    return out
 
 
 @app.get("/api/businesses")
